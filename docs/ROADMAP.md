@@ -37,17 +37,20 @@ preview.
 
 ### 1.1 Safe storage and migrations
 
-- [ ] Add Alembic or an equivalent explicit SQLite migration mechanism.
-- [ ] Define a managed application-data layout for the database, attachments, extracted content,
+- [x] Add Alembic or an equivalent explicit SQLite migration mechanism.
+- [x] Define a managed application-data layout for the database, attachments, extracted content,
   thumbnails, and temporary imports.
-- [ ] Add a configurable test data directory so tests never touch the real library.
-- [ ] Document backup and recovery expectations before storing irreplaceable annotations.
+- [x] Add a configurable test data directory so tests never touch the real library.
+- [x] Document backup and recovery expectations before storing irreplaceable annotations.
 
 Acceptance criteria:
 
 - A database created by the previous application version upgrades without data loss.
 - Tests can create and destroy isolated libraries without using the user's data directory.
 - Partial imports do not leave records pointing to missing files.
+
+The first two criteria are covered now. The partial-import invariant becomes testable when durable
+attachment importing is introduced in 1.2 and must be satisfied before that workflow is complete.
 
 ### 1.2 Document and attachment records
 
@@ -199,6 +202,6 @@ Acceptance criteria:
 
 ## Recommended next task
 
-Implement milestone 1.1 as one narrow vertical change: introduce migrations, define an isolated
-library-path abstraction, and prove that an existing database upgrades safely. Do not expand the
-metadata model or import UI in the same change.
+Implement the first narrow slice of milestone 1.2: add an attachment record and a transaction-safe
+managed-file operation, then prove that a failed import cannot leave a database record pointing to
+a missing file. Do not replace the conversion endpoint or expand the import UI in the same change.

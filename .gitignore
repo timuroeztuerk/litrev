@@ -1,12 +1,47 @@
+# Private research data
+# Keep papers, copied databases, extracted text, and other local library contents here.
+/local-data/
+
+# Research papers are private even when placed elsewhere in the worktree.
+*.[pP][dD][fF]
+
+# SQLite databases, backups, and transaction/recovery sidecars.
+*.[dD][bB]
+*.[dD][bB]3
+*.[sS][qQ][lL][iI][tT][eE]
+*.[sS][qQ][lL][iI][tT][eE]3
+*.[dD][bB].*
+*.[dD][bB]3.*
+*.[sS][qQ][lL][iI][tT][eE].*
+*.[sS][qQ][lL][iI][tT][eE]3.*
+*-[jJ][oO][uU][rR][nN][aA][lL]
+*-[sS][hH][mM]
+*-[wW][aA][lL]
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
 .venv/
+coverage.xml
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node and Vite
 node_modules/
 web/dist/
+
+# Rust and Tauri
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# General build output
 build/
 dist/
-*.egg-info/

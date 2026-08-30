@@ -106,8 +106,8 @@ decorative copy—unless the product requirement specifically calls for it.
   research-map milestone.
 - The Python service is started beside Vite during development. Production packaging as a Tauri
   sidecar is not implemented yet.
-- `Base.metadata.create_all()` is only sufficient for the current prototype. Add a migration system
-  before making consequential schema changes to user data.
+- Alembic migrations own the persistent schema. Application startup upgrades the database; use
+  `Base.metadata.create_all()` only to construct the intentional pre-Alembic fixture in tests.
 
 ## Commands
 

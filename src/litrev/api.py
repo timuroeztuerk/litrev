@@ -9,10 +9,12 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from litrev.diagnostics import run_checks
-from litrev.infrastructure.database import Database, default_database_path
+from litrev.infrastructure.database import Database
 from litrev.infrastructure.models import SourceRecord
+from litrev.infrastructure.storage import LibraryPaths
 from litrev.services.documents import DocumentConversionFailure, convert_document_bytes
 
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
@@ -39,11 +41,11 @@ class DocumentRead(BaseModel):
 
 
 def create_app(database: Database | None = None) -> FastAPI:
-    active_database = database or Database.from_path(default_database_path())
+    active_database = database or Database.from_library(LibraryPaths.default())
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        active_database.create_schema()
+        active_database.migrate()
         yield
 
     application = FastAPI(
@@ -79,13 +81,21 @@ def create_app(database: Database | None = None) -> FastAPI:
     )
     async def create_source(source: SourceCreate) -> SourceRecord:
         title = source.title.strip()
+        doi = (source.doi or "").strip() or None
         if not title:
             raise HTTPException(status_code=422, detail="A source title is required")
 
         with active_database.session() as session:
-            record = SourceRecord(title=title, doi=source.doi)
+            record = SourceRecord(title=title, doi=doi)
             session.add(record)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError as error:
+                session.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A source with this DOI already exists.",
+                ) from error
             session.refresh(record)
             session.expunge(record)
             return record

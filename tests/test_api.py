@@ -44,6 +44,31 @@ async def test_source_can_be_created_and_listed() -> None:
 
 
 @pytest.mark.anyio
+async def test_duplicate_doi_returns_a_conflict() -> None:
+    application = create_app(Database.in_memory())
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        created = await client.post(
+            "/api/sources",
+            json={"title": "First paper", "doi": " 10.1234/example "},
+        )
+        duplicate = await client.post(
+            "/api/sources",
+            json={"title": "Second paper", "doi": "10.1234/example"},
+        )
+        sources = await client.get("/api/sources")
+
+    assert created.status_code == 201
+    assert created.json()["doi"] == "10.1234/example"
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "A source with this DOI already exists."
+    assert [source["title"] for source in sources.json()] == ["First paper"]
+
+
+@pytest.mark.anyio
 async def test_document_can_be_converted_with_anydoc() -> None:
     application = create_app(Database.in_memory())
     transport = httpx2.ASGITransport(app=application)

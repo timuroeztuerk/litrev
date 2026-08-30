@@ -132,8 +132,52 @@ The current development API is intentionally small:
 | `POST` | `/api/documents/convert` | Convert a document of up to 50 MB with Anydoc |
 
 The service binds to `127.0.0.1:8765`. Application data uses the operating system's standard
-per-user data directory through `platformdirs`; on Linux the default database is normally
-`~/.local/share/litrev/litrev.sqlite3`.
+per-user data directory through `platformdirs`; on Linux the default library is normally
+`~/.local/share/litrev/`. Litrev creates and manages this layout when the service starts:
+
+```text
+litrev/
+├── litrev.sqlite3
+├── attachments/
+├── extracted/
+├── thumbnails/
+└── temporary-imports/
+```
+
+Set `LITREV_DATA_DIR` to use a different library root during isolated development or testing. Tests
+also inject temporary library roots directly and must never read from or write to the real library.
+The database schema is upgraded explicitly with Alembic when the local API starts.
+
+## Private research data
+
+Do not add copyrighted papers or a real research database to Git. When a development file must be
+kept inside this repository, put it under `local-data/` (for example,
+`local-data/papers/paper.pdf`). The entire directory is ignored. As a second safeguard, `.gitignore`
+also excludes PDF files, SQLite database files, and SQLite journal files anywhere in the worktree.
+
+The application database normally lives outside the repository in the operating system's per-user
+data directory, as described above. Selecting a document for the current conversion preview reads
+the original file and does not copy it into this repository. Ignore rules prevent new files from
+being added; they are not encryption and do not remove a file that Git was already tracking.
+
+Schema migrations are forward-only because automatically reversing a revision could destroy
+research data. Developers create and review new revisions with `uv run alembic revision
+--autogenerate -m "description"`; application startup is responsible for applying them. Never run
+Alembic commands against the real library while developing a migration.
+
+### Backup and recovery
+
+Litrev does not yet have an in-app backup command. Until it does:
+
+1. Fully close Litrev so SQLite has no active transaction.
+2. Copy the entire library directory—not only `litrev.sqlite3`—to a separate backup location.
+3. Keep dated backups before application upgrades or consequential imports.
+4. To restore, close Litrev, move the current library aside, and copy the complete backup into its
+   place. Start Litrev and verify the sources and notes before deleting the moved copy.
+
+Never overwrite the only copy of a library during recovery. A restored older database will be
+migrated forward on startup; migrations do not provide a way to recover documents or records that
+were already deleted before the backup was made.
 
 ## Verification
 

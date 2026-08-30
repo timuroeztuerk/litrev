@@ -5,6 +5,7 @@ description = "A local-first desktop workspace for literature reviews"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic>=1.16",
     "fastapi>=0.116",
     "firecrawl-anydoc>=0.2.4",
     "networkx>=3.5",
