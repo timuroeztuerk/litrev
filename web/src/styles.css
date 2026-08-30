@@ -166,6 +166,59 @@ h1 {
   font-size: 25px;
 }
 
+.document-panel {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 35px;
+  padding: 25px 26px;
+  margin-top: 16px;
+  color: #e7eee9;
+  background: #344b40;
+  border-radius: 14px;
+}
+
+.document-copy h2 {
+  margin-bottom: 7px;
+  font-size: 25px;
+}
+
+.document-copy p:last-child {
+  margin-bottom: 0;
+  color: #bfccc4;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.document-panel .eyebrow,
+.document-panel label {
+  color: #b7c8bd;
+}
+
+.document-panel input {
+  color: #dce6df;
+  background: #2a4035;
+  border-color: #668071;
+}
+
+.document-panel input::file-selector-button {
+  margin-right: 12px;
+  padding: 6px 9px;
+  color: #24372e;
+  background: #dfe8e1;
+  border: 0;
+  border-radius: 5px;
+}
+
+.document-panel .input-row button {
+  color: #2b4035;
+  background: #e5ede7;
+}
+
+.document-panel .input-row button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 label {
   display: block;
   margin-bottom: 8px;
@@ -212,6 +265,41 @@ input:focus {
 
 .library {
   margin-top: 40px;
+}
+
+.document-preview {
+  margin-top: 40px;
+  padding: 24px;
+  background: #fbfaf6;
+  border: 1px solid #dedbd2;
+  border-radius: 14px;
+}
+
+.document-preview .section-heading > div {
+  display: block;
+}
+
+.document-preview .section-heading h2 {
+  margin: 0;
+}
+
+.document-preview article {
+  max-height: 520px;
+  padding: 8px 10px 20px;
+  overflow: auto;
+  line-height: 1.65;
+}
+
+.document-preview article table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.document-preview article th,
+.document-preview article td {
+  padding: 7px 9px;
+  border: 1px solid #d4d3cc;
+  text-align: left;
 }
 
 .section-heading {

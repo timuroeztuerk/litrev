@@ -41,3 +41,21 @@ async def test_source_can_be_created_and_listed() -> None:
     assert created.status_code == 201
     assert sources.status_code == 200
     assert sources.json()[0]["title"] == "A useful paper"
+
+
+@pytest.mark.anyio
+async def test_document_can_be_converted_with_anydoc() -> None:
+    application = create_app(Database.in_memory())
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.post(
+            "/api/documents/convert",
+            files={"document": ("papers.csv", b"paper,year\nA useful paper,2026\n", "text/csv")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["format"] == "csv"
+    assert "A useful paper" in response.json()["markdown"]

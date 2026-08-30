@@ -4,7 +4,6 @@ import sqlite3
 from importlib.metadata import version
 
 import networkx
-import pymupdf
 import sqlalchemy
 
 
@@ -17,9 +16,9 @@ def run_checks() -> dict[str, str]:
         connection.close()
 
     return {
+        "Anydoc": version("firecrawl-anydoc"),
         "FastAPI": version("fastapi"),
         "SQLite + FTS5": sqlite3.sqlite_version,
         "SQLAlchemy": sqlalchemy.__version__,
-        "PyMuPDF": pymupdf.__version__,
         "NetworkX": networkx.__version__,
     }

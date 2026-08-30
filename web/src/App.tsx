@@ -1,12 +1,24 @@
 import { FormEvent, useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import { createSource, getHealth, getSources, type Source } from "./api";
+import {
+  convertDocument,
+  createSource,
+  getHealth,
+  getSources,
+  type ConvertedDocument,
+  type Source,
+} from "./api";
 import "./styles.css";
 
 export default function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [serviceReady, setServiceReady] = useState(false);
   const [title, setTitle] = useState("");
+  const [document, setDocument] = useState<File | null>(null);
+  const [convertedDocument, setConvertedDocument] = useState<ConvertedDocument | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,6 +44,21 @@ export default function App() {
       setError(null);
     } catch {
       setError("The source could not be saved.");
+    }
+  }
+
+  async function handleDocumentImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!document) return;
+
+    setIsConverting(true);
+    try {
+      setConvertedDocument(await convertDocument(document));
+      setError(null);
+    } catch {
+      setError("Anydoc could not convert this document.");
+    } finally {
+      setIsConverting(false);
     }
   }
 
@@ -88,7 +115,46 @@ export default function App() {
           </form>
         </section>
 
+        <section className="document-panel" aria-labelledby="document-heading">
+          <div className="document-copy">
+            <p className="eyebrow">Anydoc import</p>
+            <h2 id="document-heading">Read a document locally</h2>
+            <p>Convert a PDF or research document to structured Markdown without uploading it.</p>
+          </div>
+          <form onSubmit={handleDocumentImport}>
+            <label htmlFor="document-file">Choose a document</label>
+            <div className="input-row">
+              <input
+                id="document-file"
+                type="file"
+                accept=".pdf,.doc,.docx,.odt,.rtf,.epub,.ppt,.pptx,.xls,.xlsx,.ods,.odp,.csv"
+                onChange={(event) => setDocument(event.target.files?.[0] ?? null)}
+              />
+              <button type="submit" disabled={!document || isConverting}>
+                {isConverting ? "Reading…" : "Read document"}
+              </button>
+            </div>
+          </form>
+        </section>
+
         {error && <p className="error-message">{error}</p>}
+
+        {convertedDocument && (
+          <section className="document-preview" aria-labelledby="preview-heading">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{convertedDocument.format}</p>
+                <h2 id="preview-heading">{convertedDocument.filename}</h2>
+              </div>
+              <span>Converted locally</span>
+            </div>
+            <article>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {convertedDocument.markdown}
+              </ReactMarkdown>
+            </article>
+          </section>
+        )}
 
         <section className="library" aria-labelledby="library-heading">
           <div className="section-heading">
@@ -99,7 +165,7 @@ export default function App() {
             <div className="empty-state">
               <span className="empty-glyph">↗</span>
               <h3>Start with one useful source</h3>
-              <p>Add its title above. PDF import and metadata lookup come next.</p>
+              <p>Add its title or import a document with Anydoc.</p>
             </div>
           ) : (
             <ul className="source-list">

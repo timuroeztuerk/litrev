@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -12,6 +13,9 @@ from sqlalchemy import select
 from litrev.diagnostics import run_checks
 from litrev.infrastructure.database import Database, default_database_path
 from litrev.infrastructure.models import SourceRecord
+from litrev.services.documents import DocumentConversionFailure, convert_document_bytes
+
+MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 
 
 class SourceCreate(BaseModel):
@@ -26,6 +30,12 @@ class SourceRead(BaseModel):
     title: str
     doi: str | None
     created_at: datetime
+
+
+class DocumentRead(BaseModel):
+    filename: str
+    format: str
+    markdown: str
 
 
 def create_app(database: Database | None = None) -> FastAPI:
@@ -79,6 +89,26 @@ def create_app(database: Database | None = None) -> FastAPI:
             session.refresh(record)
             session.expunge(record)
             return record
+
+    @application.post("/api/documents/convert", response_model=DocumentRead)
+    async def convert_document(document: Annotated[UploadFile, File()]) -> object:
+        content = await document.read(MAX_DOCUMENT_BYTES + 1)
+        if not content:
+            raise HTTPException(status_code=422, detail="The document is empty")
+        if len(content) > MAX_DOCUMENT_BYTES:
+            raise HTTPException(status_code=413, detail="Documents are limited to 50 MB")
+
+        try:
+            return convert_document_bytes(content, document.filename or "document")
+        except DocumentConversionFailure as error:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": error.code,
+                    "message": str(error),
+                    "pages": error.pages,
+                },
+            ) from error
 
     return application
 

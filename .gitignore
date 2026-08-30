@@ -6,6 +6,7 @@ __pycache__/
 node_modules/
 web/dist/
 src-tauri/target/
+src-tauri/gen/schemas/
 build/
 dist/
 *.egg-info/

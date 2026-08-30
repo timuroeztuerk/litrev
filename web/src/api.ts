@@ -10,6 +10,12 @@ export interface Health {
   technology: Record<string, string>;
 }
 
+export interface ConvertedDocument {
+  filename: string;
+  format: string;
+  markdown: string;
+}
+
 const apiBase = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8765";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,5 +39,14 @@ export function createSource(title: string): Promise<Source> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
+  });
+}
+
+export function convertDocument(file: File): Promise<ConvertedDocument> {
+  const form = new FormData();
+  form.append("document", file);
+  return request<ConvertedDocument>("/api/documents/convert", {
+    method: "POST",
+    body: form,
   });
 }
