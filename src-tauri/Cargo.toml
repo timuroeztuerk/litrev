@@ -1,0 +1,16 @@
+[package]
+name = "litrev-desktop"
+version = "0.1.0"
+description = "Local-first literature review workspace"
+authors = ["Litrev contributors"]
+edition = "2024"
+
+[lib]
+name = "litrev_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

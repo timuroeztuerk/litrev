@@ -1,0 +1,287 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #252822;
+  background: #f3f0e8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 760px;
+  min-height: 100vh;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 28px 18px 22px;
+  color: #f5f0e6;
+  background: #263a31;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 8px 30px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #839888;
+  border-radius: 9px;
+}
+
+nav {
+  display: grid;
+  gap: 5px;
+}
+
+.nav-item {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 12px;
+  color: #bdc9c0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+
+.nav-item.active {
+  color: #fff;
+  background: #385045;
+}
+
+.nav-item:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.count {
+  color: #b9c9be;
+}
+
+.service-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px;
+  color: #aebbb2;
+  font-size: 12px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: #b67b65;
+  border-radius: 50%;
+}
+
+.service-status.ready .status-dot {
+  background: #8fbb91;
+}
+
+main {
+  width: min(960px, calc(100% - 80px));
+  margin: 0 auto;
+  padding: 54px 0 80px;
+}
+
+.page-header {
+  margin-bottom: 38px;
+}
+
+.eyebrow {
+  margin: 0 0 7px;
+  color: #6d796f;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2 {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+h1 {
+  margin-bottom: 8px;
+  font-size: 45px;
+  line-height: 1;
+}
+
+.page-header p:last-child {
+  color: #697068;
+}
+
+.capture-panel {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 35px;
+  padding: 26px;
+  background: #fbfaf6;
+  border: 1px solid #dedbd2;
+  border-radius: 14px;
+  box-shadow: 0 9px 30px rgb(50 55 45 / 5%);
+}
+
+.capture-panel h2 {
+  margin-bottom: 0;
+  font-size: 25px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  color: #596159;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 13px;
+  color: #272b26;
+  background: #fff;
+  border: 1px solid #cbcfc7;
+  border-radius: 8px;
+  outline: none;
+}
+
+input:focus {
+  border-color: #607c6d;
+  box-shadow: 0 0 0 3px rgb(72 106 88 / 12%);
+}
+
+.input-row button {
+  padding: 0 18px;
+  color: #fff;
+  background: #355646;
+  border: 0;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.error-message {
+  margin: 14px 0 0;
+  color: #9c4335;
+  font-size: 13px;
+}
+
+.library {
+  margin-top: 40px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px 12px;
+  border-bottom: 1px solid #d7d4cb;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: 27px;
+}
+
+.section-heading span {
+  color: #767d75;
+  font-size: 12px;
+}
+
+.empty-state {
+  padding: 65px 20px;
+  color: #6b726a;
+  text-align: center;
+}
+
+.empty-glyph {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 17px;
+  place-items: center;
+  color: #466454;
+  border: 1px solid #aab4aa;
+  border-radius: 50%;
+  font-size: 20px;
+}
+
+.empty-state h3 {
+  margin-bottom: 7px;
+  color: #363b35;
+}
+
+.source-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.source-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 4px;
+  border-bottom: 1px solid #ddd9d0;
+}
+
+.source-list li div {
+  display: grid;
+  gap: 5px;
+}
+
+.source-list li div span,
+.source-kind {
+  color: #747b73;
+  font-size: 12px;
+}
+
+.source-kind {
+  padding: 5px 9px;
+  background: #e5e7df;
+  border-radius: 20px;
+}
