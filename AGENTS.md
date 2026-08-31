@@ -146,6 +146,12 @@ mise exec -- cargo check --manifest-path src-tauri/Cargo.toml
 
 Run the checks affected by the change while iterating, then run the full set before completion.
 
+Interactive browser QA is opt-in. By default, verify UI changes with Vitest/Testing Library,
+linting, and the production build. Do not start a development server for browser inspection,
+open or control an in-app or external browser, or use browser-automation tools unless the user
+specifically requests interactive browser QA. When it is requested, use isolated test data and
+report the result separately from automated checks.
+
 ## Change rules
 
 - API changes require Python API tests and matching TypeScript types in `web/src/api.ts`.

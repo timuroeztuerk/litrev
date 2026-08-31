@@ -4,28 +4,38 @@ import remarkGfm from "remark-gfm";
 
 import {
   ApiError,
+  applyDoiMetadataLookup,
   convertAttachment,
+  createBibliographyImport,
+  createDoiMetadataLookup,
   createDocumentImport,
   createSource,
+  getBibliographyExport,
   getExtractedText,
   getHealth,
   getSource,
   getSources,
   removeAttachment,
+  removeSource,
   updateSource,
   type ApiProblem,
   type Attachment,
+  type BibliographyFormat,
   type ConversionStatus,
+  type DoiMetadataField,
+  type DoiMetadataLookup,
   type ExtractedText,
   type ReadingStatus,
   type Source,
   type SourceDetail,
+  type SourceIdentifier,
   type SourceType,
   type SourceUpdate,
 } from "./api";
 import "./styles.css";
 
 const themeStorageKey = "litrev-theme";
+const serviceStartupTimeoutMs = 5_000;
 type CapturableSourceType = Exclude<SourceType, "other">;
 type ImportStage = "idle" | "selected" | "saving" | "converting";
 type FeedbackKind = "error" | "success" | "warning";
@@ -41,6 +51,30 @@ const readingStatusLabels: Record<ReadingStatus, string> = {
   unread: "Unread",
   reading: "Reading",
   read: "Read",
+};
+
+const bibliographyFormatLabels: Record<BibliographyFormat, string> = {
+  bibtex: "BibTeX",
+  ris: "RIS",
+  "csl-json": "CSL JSON",
+};
+
+const bibliographyExportFilenames: Record<BibliographyFormat, string> = {
+  bibtex: "litrev-library.bib",
+  ris: "litrev-library.ris",
+  "csl-json": "litrev-library.json",
+};
+
+const doiMetadataFieldLabels: Record<DoiMetadataField, string> = {
+  source_type: "Source type",
+  title: "Title",
+  authors: "Authors",
+  publication_year: "Publication year",
+  venue: "Venue",
+  url: "URL",
+  abstract: "Abstract",
+  language: "Language",
+  identifiers: "Identifiers",
 };
 
 const conversionStatusLabels: Record<ConversionStatus, string> = {
@@ -148,7 +182,82 @@ function metadataFromSource(source: Source): SourceUpdate {
     reading_status: source.reading_status,
     tags: [...source.tags],
     collections: [...source.collections],
+    identifiers: source.identifiers.map((identifier) => ({ ...identifier })),
   };
+}
+
+function identifierTypeLabel(identifierType: string): string {
+  return identifierType === "arxiv" ? "arXiv" : identifierType.toLocaleUpperCase();
+}
+
+function identifierDraftFrom(source: Source): string {
+  return source.identifiers
+    .map((identifier) => `${identifier.identifier_type}: ${identifier.value}`)
+    .join("\n");
+}
+
+function doiMetadataSourceValue(source: Source, field: DoiMetadataField): string {
+  if (field === "source_type") return sourceTypeLabels[source.source_type];
+  if (field === "authors") return source.authors.join(", ") || "Not added";
+  if (field === "identifiers") {
+    return (
+      source.identifiers
+        .map(
+          (identifier) => `${identifierTypeLabel(identifier.identifier_type)} ${identifier.value}`,
+        )
+        .join(", ") || "Not added"
+    );
+  }
+  const value = source[field];
+  return value === null || value === "" ? "Not added" : String(value);
+}
+
+function doiMetadataProposalValue(
+  lookup: DoiMetadataLookup,
+  field: DoiMetadataField,
+): string {
+  const value = lookup.proposal[field];
+  if (field === "source_type" && typeof value === "string") {
+    return sourceTypeLabels[value as SourceType];
+  }
+  if (field === "authors" && Array.isArray(value)) return value.join(", ");
+  if (field === "identifiers" && Array.isArray(value)) {
+    return value
+      .map((identifier) => {
+        const typedIdentifier = identifier as SourceIdentifier;
+        return `${identifierTypeLabel(typedIdentifier.identifier_type)} ${typedIdentifier.value}`;
+      })
+      .join(", ");
+  }
+  return String(value);
+}
+
+function formatLookupDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function parseIdentifierDraft(value: string):
+  | { identifiers: SourceIdentifier[]; error: null }
+  | { identifiers: null; error: string } {
+  const identifiers: SourceIdentifier[] = [];
+  for (const [index, rawLine] of value.split("\n").entries()) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const separator = line.indexOf(":");
+    const identifierType = line.slice(0, separator).trim();
+    const identifierValue = line.slice(separator + 1).trim();
+    if (separator < 1 || !identifierType || !identifierValue) {
+      return {
+        identifiers: null,
+        error: `Identifier line ${index + 1} must use “type: value”.`,
+      };
+    }
+    identifiers.push({ identifier_type: identifierType, value: identifierValue });
+  }
+  return { identifiers, error: null };
 }
 
 function sourceListDescription(source: Source): string {
@@ -188,7 +297,7 @@ function sourceMatchesQuery(source: Source, normalizedQuery: string): boolean {
 }
 
 function detailForImport(source: Source, attachment: Attachment): SourceDetail {
-  return { ...source, attachments: [attachment] };
+  return { ...source, attachments: [attachment], metadata_provenance: [] };
 }
 
 export default function App() {
@@ -211,12 +320,23 @@ export default function App() {
   const [importTitle, setImportTitle] = useState("");
   const [importStage, setImportStage] = useState<ImportStage>("idle");
   const [importFeedback, setImportFeedback] = useState<Feedback | null>(null);
+  const [bibliography, setBibliography] = useState<File | null>(null);
+  const [isImportingBibliography, setIsImportingBibliography] = useState(false);
+  const [bibliographyFeedback, setBibliographyFeedback] = useState<Feedback | null>(null);
+  const [bibliographyExportFormat, setBibliographyExportFormat] =
+    useState<BibliographyFormat>("bibtex");
+  const [isExportingBibliography, setIsExportingBibliography] = useState(false);
+  const [bibliographyExportFeedback, setBibliographyExportFeedback] = useState<Feedback | null>(
+    null,
+  );
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
   const [isLoadingSource, setIsLoadingSource] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [detailNotice, setDetailNotice] = useState<Feedback | null>(null);
+  const [libraryNotice, setLibraryNotice] = useState<Feedback | null>(null);
   const [retryingAttachmentId, setRetryingAttachmentId] = useState<number | null>(null);
   const [removingAttachmentId, setRemovingAttachmentId] = useState<number | null>(null);
+  const [isRemovingSource, setIsRemovingSource] = useState(false);
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [extractedText, setExtractedText] = useState<ExtractedText | null>(null);
   const [loadingTextAttachmentId, setLoadingTextAttachmentId] = useState<number | null>(null);
@@ -225,6 +345,9 @@ export default function App() {
   const titleInput = useRef<HTMLInputElement>(null);
   const importTitleInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
+  const bibliographyInput = useRef<HTMLInputElement>(null);
+  const bibliographyExportSelect = useRef<HTMLSelectElement>(null);
+  const libraryHeading = useRef<HTMLHeadingElement>(null);
   const librarySearchInput = useRef<HTMLInputElement>(null);
   const sourceRequest = useRef(0);
   const textRequest = useRef(0);
@@ -254,6 +377,11 @@ export default function App() {
       ].sort((a, b) => a.localeCompare(b)),
     [collectionFilter, sources],
   );
+  useEffect(() => {
+    if (!isExportingBibliography && bibliographyExportFeedback?.kind === "error") {
+      bibliographyExportSelect.current?.focus();
+    }
+  }, [bibliographyExportFeedback, isExportingBibliography]);
   const visibleSources = useMemo(
     () =>
       sources
@@ -286,11 +414,26 @@ export default function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
+    if (!selectedSource && libraryNotice) libraryHeading.current?.focus();
+  }, [libraryNotice, selectedSource]);
+
+  useEffect(() => {
     let active = true;
     const controller = new AbortController();
+    const markServiceUnavailable = () => {
+      window.clearTimeout(timeoutId);
+      if (!active) return;
+      setServiceStatus("unavailable");
+      setServiceError("The local Litrev service is not available.");
+    };
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+      markServiceUnavailable();
+    }, serviceStartupTimeoutMs);
 
     Promise.all([getHealth(controller.signal), getSources(controller.signal)])
       .then(([, library]) => {
+        window.clearTimeout(timeoutId);
         if (!active) return;
         setServiceStatus("ready");
         setServiceError(null);
@@ -298,13 +441,12 @@ export default function App() {
       })
       .catch(() => {
         controller.abort();
-        if (!active) return;
-        setServiceStatus("unavailable");
-        setServiceError("The local Litrev service is not available.");
+        markServiceUnavailable();
       });
 
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
       controller.abort();
     };
   }, [serviceAttempt]);
@@ -338,6 +480,7 @@ export default function App() {
     setIsLoadingSource(false);
     setSourceError(null);
     setDetailNotice(null);
+    setLibraryNotice(null);
     resetExtractedText();
   }
 
@@ -347,6 +490,7 @@ export default function App() {
     setIsLoadingSource(true);
     setSourceError(null);
     setDetailNotice(null);
+    setLibraryNotice(null);
     resetExtractedText();
     try {
       const source = await getSource(sourceId);
@@ -462,6 +606,114 @@ export default function App() {
       });
     } finally {
       clearImportSelection();
+    }
+  }
+
+  async function handleBibliographyImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isImportingBibliography) return;
+    if (!bibliography) {
+      setBibliographyFeedback({
+        kind: "error",
+        message: "Choose a BibTeX, RIS, or CSL JSON file to import.",
+      });
+      bibliographyInput.current?.focus();
+      return;
+    }
+    if (!serviceReady) {
+      setBibliographyFeedback({
+        kind: "error",
+        message:
+          serviceStatus === "connecting"
+            ? "The local service is still connecting. Try again when the sidebar says it is ready."
+            : "The local service is unavailable. Use “Retry local service” above, then import again.",
+      });
+      return;
+    }
+
+    setIsImportingBibliography(true);
+    setBibliographyFeedback(null);
+    try {
+      const result = await createBibliographyImport(bibliography);
+      setSources((current) => {
+        const importedIds = new Set(result.imported.map((source) => source.id));
+        return [...current.filter((source) => !importedIds.has(source.id)), ...result.imported];
+      });
+
+      const importedCount = result.imported.length;
+      const skippedCount = result.skipped.length;
+      const importedSummary = `${importedCount} ${importedCount === 1 ? "source" : "sources"}`;
+      const skippedSummary =
+        `${skippedCount} duplicate ${skippedCount === 1 ? "DOI was" : "DOIs were"} skipped`;
+      const duplicateNotice = skippedCount
+        ? ` ${skippedSummary}; existing sources were not changed.`
+        : "";
+      setBibliographyFeedback({
+        kind: importedCount > 0 ? "success" : "warning",
+        message:
+          importedCount > 0
+            ? `Imported ${importedSummary} from “${bibliography.name}”.${duplicateNotice}`
+            : `No new sources were imported from “${bibliography.name}”. ${skippedSummary}; existing sources were not changed.`,
+      });
+      setBibliography(null);
+      if (bibliographyInput.current) bibliographyInput.current.value = "";
+    } catch (error) {
+      setBibliographyFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "The bibliography could not be imported. Check the local service and try again.",
+        ),
+      });
+    } finally {
+      setIsImportingBibliography(false);
+    }
+  }
+
+  async function handleBibliographyExport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isExportingBibliography) return;
+    if (!serviceReady) {
+      setBibliographyExportFeedback({
+        kind: "error",
+        message:
+          serviceStatus === "connecting"
+            ? "The local service is still connecting. Try again when the sidebar says it is ready."
+            : "The local service is unavailable. Use “Retry local service” above, then export again.",
+      });
+      return;
+    }
+
+    setIsExportingBibliography(true);
+    setBibliographyExportFeedback(null);
+    try {
+      const bibliographyBlob = await getBibliographyExport(bibliographyExportFormat);
+      const downloadUrl = URL.createObjectURL(bibliographyBlob);
+      try {
+        const download = window.document.createElement("a");
+        download.href = downloadUrl;
+        download.download = bibliographyExportFilenames[bibliographyExportFormat];
+        download.hidden = true;
+        window.document.body.append(download);
+        download.click();
+        download.remove();
+      } finally {
+        URL.revokeObjectURL(downloadUrl);
+      }
+      setBibliographyExportFeedback({
+        kind: "success",
+        message: `Downloaded the library as ${bibliographyFormatLabels[bibliographyExportFormat]}.`,
+      });
+    } catch (error) {
+      setBibliographyExportFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "The library could not be exported. Check the local service and try again.",
+        ),
+      });
+    } finally {
+      setIsExportingBibliography(false);
     }
   }
 
@@ -595,6 +847,76 @@ export default function App() {
     }
   }
 
+  async function lookupSourceDoiMetadata(sourceId: number): Promise<DoiMetadataLookup> {
+    return createDoiMetadataLookup(sourceId);
+  }
+
+  async function applySourceDoiMetadata(
+    sourceId: number,
+    lookupId: number,
+    fields: DoiMetadataField[],
+  ): Promise<SourceDetail> {
+    const updated = await applyDoiMetadataLookup(sourceId, lookupId, fields);
+    setSelectedSource(updated);
+    setSources((current) => [
+      ...current.filter((source) => source.id !== updated.id),
+      updated,
+    ]);
+    return updated;
+  }
+
+  async function deleteSelectedSource(
+    sourceId: number,
+    sourceTitle: string,
+    attachmentCount: number,
+  ) {
+    const documentSummary =
+      attachmentCount === 0
+        ? "It has no saved documents."
+        : `This also deletes ${attachmentCount} saved ${attachmentCount === 1 ? "document" : "documents"}, including originals and extracted text.`;
+    const confirmed = window.confirm(
+      `Delete source “${sourceTitle}”? Its metadata and notes will be permanently removed, and it will be unlinked from tags and collections. ${documentSummary} This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setIsRemovingSource(true);
+    setDetailNotice(null);
+
+    function showCommittedRemoval(notice: Feedback) {
+      setSources((current) => current.filter((source) => source.id !== sourceId));
+      sourceRequest.current += 1;
+      setSelectedSource(null);
+      setSourceError(null);
+      resetExtractedText();
+      setLibraryNotice(notice);
+    }
+
+    try {
+      await removeSource(sourceId);
+      showCommittedRemoval({
+        kind: "success",
+        message: `Deleted “${sourceTitle}” and its saved local data.`,
+      });
+    } catch (error) {
+      const problem = problemFrom(error);
+      if (problem?.code === "source_cleanup_incomplete") {
+        showCommittedRemoval({
+          kind: "warning",
+          message:
+            problem.message ??
+            "The source was removed, but temporary file cleanup did not finish.",
+        });
+      } else {
+        setDetailNotice({
+          kind: "error",
+          message: problem?.message ?? "The source could not be removed. Try again.",
+        });
+      }
+    } finally {
+      setIsRemovingSource(false);
+    }
+  }
+
   return (
     <div className="app-shell" data-theme={isDarkMode ? "dark" : "light"}>
       <aside className="sidebar">
@@ -603,7 +925,12 @@ export default function App() {
           <span>Litrev</span>
         </div>
         <nav aria-label="Workspace">
-          <button className="nav-item active" onClick={showLibrary} type="button">
+          <button
+            className="nav-item active"
+            disabled={isRemovingSource}
+            onClick={showLibrary}
+            type="button"
+          >
             <span>Library</span>
             <span className="count">{sources.length}</span>
           </button>
@@ -664,13 +991,17 @@ export default function App() {
             <SourceDetailScreen
               detailNotice={detailNotice}
               extractedText={extractedText}
+              isRemovingSource={isRemovingSource}
               isSavingMetadata={isSavingMetadata}
               key={selectedSource.id}
               loadingTextAttachmentId={loadingTextAttachmentId}
+              onApplyDoiMetadata={applySourceDoiMetadata}
               onBack={showLibrary}
+              onDeleteSource={deleteSelectedSource}
               onRemove={removeFailedAttachment}
               onRetry={retryExtraction}
               onSaveMetadata={saveSourceMetadata}
+              onLookupDoiMetadata={lookupSourceDoiMetadata}
               onToggleText={toggleExtractedText}
               removingAttachmentId={removingAttachmentId}
               retryingAttachmentId={retryingAttachmentId}
@@ -848,15 +1179,126 @@ export default function App() {
                 </form>
               </section>
 
+              <section className="bibliography-panel" aria-labelledby="bibliography-heading">
+                <div className="capture-copy">
+                  <p className="eyebrow">Bibliography files</p>
+                  <h2 id="bibliography-heading">Import and export</h2>
+                  <p>
+                    Move source metadata through BibTeX, RIS, or CSL JSON while keeping saved
+                    identifiers.
+                  </p>
+                </div>
+                <div className="bibliography-workflows">
+                  <form
+                    aria-busy={isImportingBibliography}
+                    aria-labelledby="bibliography-import-heading"
+                    noValidate
+                    onSubmit={handleBibliographyImport}
+                  >
+                    <h3 id="bibliography-import-heading">Import metadata</h3>
+                    <div className="bibliography-fields">
+                      <div className="form-field">
+                        <label htmlFor="bibliography-file">Choose a bibliography</label>
+                        <input
+                          accept=".bib,.ris,.json"
+                          aria-describedby={
+                            bibliographyFeedback ? "bibliography-feedback" : undefined
+                          }
+                          aria-invalid={bibliographyFeedback?.kind === "error"}
+                          disabled={isImportingBibliography}
+                          id="bibliography-file"
+                          onChange={(event) => {
+                            setBibliography(event.target.files?.[0] ?? null);
+                            setBibliographyFeedback(null);
+                          }}
+                          ref={bibliographyInput}
+                          type="file"
+                        />
+                      </div>
+                      <button disabled={isImportingBibliography} type="submit">
+                        {isImportingBibliography ? "Importing…" : "Import bibliography"}
+                      </button>
+                    </div>
+                    {bibliographyFeedback && (
+                      <p
+                        className={`capture-feedback ${bibliographyFeedback.kind}`}
+                        id="bibliography-feedback"
+                        role={bibliographyFeedback.kind === "error" ? "alert" : "status"}
+                      >
+                        {bibliographyFeedback.message}
+                      </p>
+                    )}
+                  </form>
+                  <form
+                    aria-busy={isExportingBibliography}
+                    aria-labelledby="bibliography-export-heading"
+                    noValidate
+                    onSubmit={handleBibliographyExport}
+                  >
+                    <h3 id="bibliography-export-heading">Export library</h3>
+                    <div className="bibliography-fields bibliography-export-fields">
+                      <div className="form-field">
+                        <label htmlFor="bibliography-export-format">Export format</label>
+                        <select
+                          aria-describedby={
+                            bibliographyExportFeedback
+                              ? "bibliography-export-feedback"
+                              : undefined
+                          }
+                          aria-invalid={bibliographyExportFeedback?.kind === "error"}
+                          disabled={isExportingBibliography}
+                          id="bibliography-export-format"
+                          onChange={(event) => {
+                            setBibliographyExportFormat(event.target.value as BibliographyFormat);
+                            setBibliographyExportFeedback(null);
+                          }}
+                          ref={bibliographyExportSelect}
+                          value={bibliographyExportFormat}
+                        >
+                          {Object.entries(bibliographyFormatLabels).map(([format, label]) => (
+                            <option key={format} value={format}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button disabled={isExportingBibliography} type="submit">
+                        {isExportingBibliography ? "Exporting…" : "Export library"}
+                      </button>
+                    </div>
+                    {bibliographyExportFeedback && (
+                      <p
+                        className={`capture-feedback ${bibliographyExportFeedback.kind}`}
+                        id="bibliography-export-feedback"
+                        role={bibliographyExportFeedback.kind === "error" ? "alert" : "status"}
+                      >
+                        {bibliographyExportFeedback.message}
+                      </p>
+                    )}
+                  </form>
+                </div>
+              </section>
+
               {sourceError && (
                 <p className="error-message" role="alert">
                   {sourceError}
                 </p>
               )}
 
+              {libraryNotice && (
+                <p
+                  className={`detail-notice ${libraryNotice.kind}`}
+                  role={libraryNotice.kind === "error" ? "alert" : "status"}
+                >
+                  {libraryNotice.message}
+                </p>
+              )}
+
               <section className="library" aria-labelledby="library-heading">
                 <div className="section-heading">
-                  <h2 id="library-heading">Sources</h2>
+                  <h2 id="library-heading" ref={libraryHeading} tabIndex={-1}>
+                    Sources
+                  </h2>
                   <span aria-live="polite">
                     {visibleSources.length} of {sources.length} sources
                   </span>
@@ -1010,12 +1452,20 @@ export default function App() {
 interface SourceDetailScreenProps {
   detailNotice: Feedback | null;
   extractedText: ExtractedText | null;
+  isRemovingSource: boolean;
   isSavingMetadata: boolean;
   loadingTextAttachmentId: number | null;
+  onApplyDoiMetadata: (
+    sourceId: number,
+    lookupId: number,
+    fields: DoiMetadataField[],
+  ) => Promise<SourceDetail>;
   onBack: () => void;
+  onDeleteSource: (sourceId: number, sourceTitle: string, attachmentCount: number) => Promise<void>;
   onRemove: (attachmentId: number, filename: string) => Promise<void>;
   onRetry: (attachmentId: number) => Promise<void>;
   onSaveMetadata: (sourceId: number, metadata: SourceUpdate) => Promise<boolean>;
+  onLookupDoiMetadata: (sourceId: number) => Promise<DoiMetadataLookup>;
   onToggleText: (attachmentId: number) => Promise<void>;
   removingAttachmentId: number | null;
   retryingAttachmentId: number | null;
@@ -1026,12 +1476,16 @@ interface SourceDetailScreenProps {
 function SourceDetailScreen({
   detailNotice,
   extractedText,
+  isRemovingSource,
   isSavingMetadata,
   loadingTextAttachmentId,
+  onApplyDoiMetadata,
   onBack,
+  onDeleteSource,
   onRemove,
   onRetry,
   onSaveMetadata,
+  onLookupDoiMetadata,
   onToggleText,
   removingAttachmentId,
   retryingAttachmentId,
@@ -1042,15 +1496,30 @@ function SourceDetailScreen({
   const documentsHeading = useRef<HTMLHeadingElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const editTitle = useRef<HTMLInputElement>(null);
+  const identifierInput = useRef<HTMLTextAreaElement>(null);
+  const doiLookupButton = useRef<HTMLButtonElement>(null);
+  const doiReviewHeading = useRef<HTMLHeadingElement>(null);
+  const doiApplyButton = useRef<HTMLButtonElement>(null);
   const [isEditingMetadata, setIsEditingMetadata] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<SourceUpdate>(() =>
     metadataFromSource(source),
   );
+  const [identifierDraft, setIdentifierDraft] = useState(() => identifierDraftFrom(source));
+  const [identifierError, setIdentifierError] = useState<string | null>(null);
+  const [doiLookup, setDoiLookup] = useState<DoiMetadataLookup | null>(null);
+  const [selectedDoiFields, setSelectedDoiFields] = useState<DoiMetadataField[]>([]);
+  const [doiFeedback, setDoiFeedback] = useState<Feedback | null>(null);
+  const [isLookingUpDoi, setIsLookingUpDoi] = useState(false);
+  const [isApplyingDoi, setIsApplyingDoi] = useState(false);
   const wasEditingMetadata = useRef(false);
   const previousAttachmentState = useRef({
     sourceId: source.id,
     count: source.attachments.length,
   });
+  const deletionDocumentSummary =
+    source.attachments.length === 0
+      ? "It has no saved documents."
+      : `This also removes ${source.attachments.length} saved ${source.attachments.length === 1 ? "document" : "documents"}, including originals and extracted text.`;
 
   useEffect(() => {
     heading.current?.focus();
@@ -1076,13 +1545,30 @@ function SourceDetailScreen({
     };
   }, [source.id, source.attachments.length]);
 
+  useEffect(() => {
+    if (doiLookup) doiReviewHeading.current?.focus();
+  }, [doiLookup]);
+
+  useEffect(() => {
+    if (!doiFeedback) return;
+    if (doiFeedback.kind === "error" && doiLookup) doiApplyButton.current?.focus();
+    else doiLookupButton.current?.focus();
+  }, [doiFeedback, doiLookup]);
+
   function beginMetadataEdit() {
     setMetadataDraft(metadataFromSource(source));
+    setIdentifierDraft(identifierDraftFrom(source));
+    setIdentifierError(null);
+    setDoiLookup(null);
+    setSelectedDoiFields([]);
+    setDoiFeedback(null);
     setIsEditingMetadata(true);
   }
 
   function cancelMetadataEdit() {
     setMetadataDraft(metadataFromSource(source));
+    setIdentifierDraft(identifierDraftFrom(source));
+    setIdentifierError(null);
     setIsEditingMetadata(false);
   }
 
@@ -1093,6 +1579,13 @@ function SourceDetailScreen({
       editTitle.current?.focus();
       return;
     }
+    const parsedIdentifiers = parseIdentifierDraft(identifierDraft);
+    if (parsedIdentifiers.identifiers === null) {
+      setIdentifierError(parsedIdentifiers.error);
+      identifierInput.current?.focus();
+      return;
+    }
+    setIdentifierError(null);
     const saved = await onSaveMetadata(source.id, {
       ...metadataDraft,
       title,
@@ -1101,15 +1594,82 @@ function SourceDetailScreen({
       collections: metadataDraft.collections
         .map((collection) => collection.trim())
         .filter(Boolean),
+      identifiers: parsedIdentifiers.identifiers,
     });
     if (saved) setIsEditingMetadata(false);
+  }
+
+  async function beginDoiLookup() {
+    setIsLookingUpDoi(true);
+    setDoiFeedback(null);
+    setDoiLookup(null);
+    try {
+      const lookup = await onLookupDoiMetadata(source.id);
+      setDoiLookup(lookup);
+      setSelectedDoiFields(
+        lookup.available_fields.filter((field) => !lookup.conflicting_fields.includes(field)),
+      );
+    } catch (error) {
+      setDoiFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "DOI metadata could not be retrieved. Check the local service and try again.",
+        ),
+      });
+    } finally {
+      setIsLookingUpDoi(false);
+    }
+  }
+
+  function toggleDoiField(field: DoiMetadataField) {
+    setSelectedDoiFields((current) =>
+      current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
+    );
+    setDoiFeedback(null);
+  }
+
+  function cancelDoiReview() {
+    setDoiLookup(null);
+    setSelectedDoiFields([]);
+    setDoiFeedback(null);
+    window.requestAnimationFrame(() => doiLookupButton.current?.focus());
+  }
+
+  async function applySelectedDoiMetadata() {
+    if (!doiLookup) return;
+    if (selectedDoiFields.length === 0) {
+      setDoiFeedback({ kind: "error", message: "Choose at least one field to apply." });
+      return;
+    }
+    setIsApplyingDoi(true);
+    setDoiFeedback(null);
+    try {
+      await onApplyDoiMetadata(source.id, doiLookup.id, selectedDoiFields);
+      setDoiLookup(null);
+      setSelectedDoiFields([]);
+      setDoiFeedback({
+        kind: "success",
+        message: `Applied ${selectedDoiFields.length} ${selectedDoiFields.length === 1 ? "field" : "fields"} from ${doiLookup.provider}.`,
+      });
+    } catch (error) {
+      setDoiFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "DOI metadata could not be applied. Review the source and try again.",
+        ),
+      });
+    } finally {
+      setIsApplyingDoi(false);
+    }
   }
 
   return (
     <section className="source-detail" aria-labelledby="source-detail-heading">
       <button
         className="back-button"
-        disabled={isSavingMetadata}
+        disabled={isSavingMetadata || isRemovingSource}
         onClick={onBack}
         type="button"
       >
@@ -1138,7 +1698,12 @@ function SourceDetailScreen({
         <div className="metadata-heading">
           <h3 id="metadata-heading">Metadata</h3>
           {!isEditingMetadata && (
-            <button onClick={beginMetadataEdit} ref={editButton} type="button">
+            <button
+              disabled={isRemovingSource}
+              onClick={beginMetadataEdit}
+              ref={editButton}
+              type="button"
+            >
               Edit source
             </button>
           )}
@@ -1233,6 +1798,34 @@ function SourceDetailScreen({
                   }
                   value={metadataDraft.doi ?? ""}
                 />
+              </div>
+              <div className="form-field metadata-identifiers-field">
+                <label htmlFor="edit-source-identifiers">Identifiers (one per line)</label>
+                <textarea
+                  aria-describedby={
+                    identifierError ? "edit-source-identifiers-error" : "edit-source-identifiers-hint"
+                  }
+                  aria-invalid={identifierError !== null}
+                  disabled={isSavingMetadata}
+                  id="edit-source-identifiers"
+                  onChange={(event) => {
+                    setIdentifierDraft(event.target.value);
+                    setIdentifierError(null);
+                  }}
+                  placeholder="isbn: 978-1-4028-9462-6"
+                  ref={identifierInput}
+                  rows={3}
+                  value={identifierDraft}
+                />
+                {identifierError ? (
+                  <p className="metadata-field-error" id="edit-source-identifiers-error" role="alert">
+                    {identifierError}
+                  </p>
+                ) : (
+                  <p className="metadata-field-hint" id="edit-source-identifiers-hint">
+                    Use a named type and value, such as ISBN, ISSN, PMID, PMCID, or arXiv.
+                  </p>
+                )}
               </div>
               <div className="form-field">
                 <label htmlFor="edit-source-url">URL</label>
@@ -1349,6 +1942,39 @@ function SourceDetailScreen({
               <dt>DOI</dt>
               <dd>{source.doi ?? "Not added"}</dd>
             </div>
+            <div className="metadata-identifiers">
+              <dt>Identifiers</dt>
+              <dd>
+                {source.identifiers.length ? (
+                  <ul className="metadata-value-list">
+                    {source.identifiers.map((identifier) => (
+                      <li key={`${identifier.identifier_type}:${identifier.value}`}>
+                        <span>{identifierTypeLabel(identifier.identifier_type)}</span> {identifier.value}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  "Not added"
+                )}
+              </dd>
+            </div>
+            <div className="metadata-citation-keys">
+              <dt>Imported citation keys</dt>
+              <dd>
+                {source.citation_keys.length ? (
+                  <ul className="metadata-value-list">
+                    {source.citation_keys.map((citationKey) => (
+                      <li key={`${citationKey.bibliography_format}:${citationKey.value}`}>
+                        <span>{bibliographyFormatLabels[citationKey.bibliography_format]}</span>{" "}
+                        {citationKey.value}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  "Not added"
+                )}
+              </dd>
+            </div>
             <div>
               <dt>URL</dt>
               <dd>
@@ -1385,6 +2011,132 @@ function SourceDetailScreen({
         )}
       </section>
 
+      <section className="doi-metadata-section" aria-labelledby="doi-metadata-heading">
+        <div className="doi-metadata-heading">
+          <div>
+            <h3 id="doi-metadata-heading">DOI metadata</h3>
+            <p>
+              Ask Crossref for metadata only when you choose. Nothing changes until you review and
+              apply selected fields.
+            </p>
+          </div>
+          <button
+            disabled={
+              !source.doi ||
+              isEditingMetadata ||
+              isLookingUpDoi ||
+              isApplyingDoi ||
+              isRemovingSource ||
+              doiLookup !== null
+            }
+            onClick={beginDoiLookup}
+            ref={doiLookupButton}
+            type="button"
+          >
+            {isLookingUpDoi ? "Looking up…" : "Look up DOI metadata"}
+          </button>
+        </div>
+        {!source.doi && <p className="doi-metadata-hint">Add and save a DOI to enable lookup.</p>}
+
+        {doiFeedback && (
+          <p
+            className={`doi-metadata-feedback ${doiFeedback.kind}`}
+            role={doiFeedback.kind === "error" ? "alert" : "status"}
+          >
+            {doiFeedback.message}
+          </p>
+        )}
+
+        {doiLookup && (
+          <div aria-busy={isApplyingDoi} className="doi-metadata-review">
+            <div className="doi-review-intro">
+              <div>
+                <h4 ref={doiReviewHeading} tabIndex={-1}>
+                  Review metadata from {doiLookup.provider}
+                </h4>
+                <p>
+                  Retrieved {formatLookupDate(doiLookup.retrieved_at)} for DOI {doiLookup.retrieved_doi}.
+                </p>
+              </div>
+              <a href={doiLookup.provider_url} rel="noreferrer" target="_blank">
+                View provider record
+              </a>
+            </div>
+            <fieldset className="doi-field-list">
+              <legend>Choose fields to apply</legend>
+              {doiLookup.available_fields.map((field) => {
+                const conflicts = doiLookup.conflicting_fields.includes(field);
+                return (
+                  <label className={conflicts ? "doi-field conflict" : "doi-field"} key={field}>
+                    <span className="doi-field-choice">
+                      <input
+                        checked={selectedDoiFields.includes(field)}
+                        disabled={isApplyingDoi}
+                        onChange={() => toggleDoiField(field)}
+                        type="checkbox"
+                      />
+                      <strong>{doiMetadataFieldLabels[field]}</strong>
+                      {conflicts && <span className="doi-conflict-label">Conflict</span>}
+                    </span>
+                    <span className="doi-field-comparison">
+                      <span>
+                        <small>Current</small>
+                        {doiMetadataSourceValue(source, field)}
+                      </span>
+                      <span>
+                        <small>Crossref</small>
+                        {doiMetadataProposalValue(doiLookup, field)}
+                      </span>
+                    </span>
+                    {field === "identifiers" && (
+                      <span className="doi-merge-note">
+                        Selected identifiers are added without removing saved identifiers.
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </fieldset>
+            <div className="doi-review-actions">
+              <button
+                disabled={isApplyingDoi}
+                onClick={applySelectedDoiMetadata}
+                ref={doiApplyButton}
+                type="button"
+              >
+                {isApplyingDoi ? "Applying…" : "Apply selected fields"}
+              </button>
+              <button disabled={isApplyingDoi} onClick={cancelDoiReview} type="button">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {source.metadata_provenance.length > 0 && (
+          <div className="metadata-provenance">
+            <h4>Applied metadata provenance</h4>
+            <ul>
+              {source.metadata_provenance.map((provenance) => (
+                <li key={provenance.lookup_id}>
+                  <a href={provenance.provider_url} rel="noreferrer" target="_blank">
+                    {provenance.provider}
+                  </a>{" "}
+                  for DOI {provenance.retrieved_doi}
+                  <span>
+                    Retrieved {formatLookupDate(provenance.retrieved_at)} · Applied{" "}
+                    {formatLookupDate(provenance.applied_at)} · Fields:{" "}
+                    {provenance.applied_fields
+                      .map((field) => doiMetadataFieldLabels[field].toLocaleLowerCase())
+                      .join(", ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
       <div className="attachment-heading">
         <h3 ref={documentsHeading} tabIndex={-1}>Documents</h3>
         <span>{source.attachments.length}</span>
@@ -1418,7 +2170,7 @@ function SourceDetailScreen({
                 <div className="attachment-actions">
                   {succeeded ? (
                     <button
-                      disabled={loadingTextAttachmentId !== null}
+                      disabled={loadingTextAttachmentId !== null || isRemovingSource}
                       onClick={() => void onToggleText(attachment.id)}
                       type="button"
                     >
@@ -1430,7 +2182,11 @@ function SourceDetailScreen({
                     </button>
                   ) : (
                     <button
-                      disabled={retryingAttachmentId !== null || removingAttachmentId !== null}
+                      disabled={
+                        retryingAttachmentId !== null ||
+                        removingAttachmentId !== null ||
+                        isRemovingSource
+                      }
                       onClick={() => void onRetry(attachment.id)}
                       type="button"
                     >
@@ -1440,7 +2196,11 @@ function SourceDetailScreen({
                   {attachment.can_remove && (
                     <button
                       className="danger-button"
-                      disabled={retryingAttachmentId !== null || removingAttachmentId !== null}
+                      disabled={
+                        retryingAttachmentId !== null ||
+                        removingAttachmentId !== null ||
+                        isRemovingSource
+                      }
                       onClick={() => void onRemove(attachment.id, attachment.original_filename)}
                       type="button"
                     >
@@ -1472,6 +2232,30 @@ function SourceDetailScreen({
           </article>
         </section>
       )}
+
+      <section className="source-danger-zone" aria-labelledby="delete-source-heading">
+        <div>
+          <h3 id="delete-source-heading">Delete source</h3>
+          <p>
+            Permanently remove its metadata, notes, and organization links. {deletionDocumentSummary}
+          </p>
+        </div>
+        <button
+          className="danger-button"
+          disabled={
+            isEditingMetadata ||
+            isSavingMetadata ||
+            retryingAttachmentId !== null ||
+            removingAttachmentId !== null ||
+            loadingTextAttachmentId !== null ||
+            isRemovingSource
+          }
+          onClick={() => void onDeleteSource(source.id, source.title, source.attachments.length)}
+          type="button"
+        >
+          {isRemovingSource ? "Deleting source…" : "Delete source"}
+        </button>
+      </section>
     </section>
   );
 }

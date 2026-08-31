@@ -1,5 +1,26 @@
 export type SourceType = "paper" | "book" | "other";
 export type ReadingStatus = "unread" | "reading" | "read";
+export type BibliographyFormat = "bibtex" | "ris" | "csl-json";
+export type DoiMetadataField =
+  | "source_type"
+  | "title"
+  | "authors"
+  | "publication_year"
+  | "venue"
+  | "url"
+  | "abstract"
+  | "language"
+  | "identifiers";
+
+export interface SourceIdentifier {
+  identifier_type: string;
+  value: string;
+}
+
+export interface SourceCitationKey {
+  bibliography_format: BibliographyFormat;
+  value: string;
+}
 
 export interface Source {
   id: number;
@@ -15,6 +36,8 @@ export interface Source {
   reading_status: ReadingStatus;
   tags: string[];
   collections: string[];
+  identifiers: SourceIdentifier[];
+  citation_keys: SourceCitationKey[];
   created_at: string;
 }
 
@@ -31,6 +54,7 @@ export interface SourceUpdate {
   reading_status: ReadingStatus;
   tags: string[];
   collections: string[];
+  identifiers: SourceIdentifier[];
 }
 
 export type ConversionStatus =
@@ -63,11 +87,61 @@ export interface Attachment {
 
 export interface SourceDetail extends Source {
   attachments: Attachment[];
+  metadata_provenance: DoiMetadataProvenance[];
+}
+
+export interface DoiMetadataProvenance {
+  lookup_id: number;
+  provider: string;
+  provider_url: string;
+  requested_doi: string;
+  retrieved_doi: string;
+  retrieved_at: string;
+  applied_fields: DoiMetadataField[];
+  applied_at: string;
+}
+
+export interface DoiMetadataProposal {
+  source_type: SourceType | null;
+  title: string | null;
+  authors: string[] | null;
+  publication_year: number | null;
+  venue: string | null;
+  url: string | null;
+  abstract: string | null;
+  language: string | null;
+  identifiers: SourceIdentifier[] | null;
+}
+
+export interface DoiMetadataLookup {
+  id: number;
+  provider: string;
+  provider_url: string;
+  requested_doi: string;
+  retrieved_doi: string;
+  retrieved_at: string;
+  proposal: DoiMetadataProposal;
+  available_fields: DoiMetadataField[];
+  conflicting_fields: DoiMetadataField[];
 }
 
 export interface ImportedDocument {
   source: Source;
   attachment: Attachment;
+}
+
+export interface SkippedBibliographySource {
+  entry_id: string;
+  title: string;
+  doi: string;
+  reason: "existing_doi" | "duplicate_doi_in_file";
+}
+
+export interface BibliographyImport {
+  bibliography_format: BibliographyFormat;
+  total_entries: number;
+  imported: Source[];
+  skipped: SkippedBibliographySource[];
 }
 
 export interface ExtractedText {
@@ -105,17 +179,27 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);
   if (!response.ok) {
-    let detail: unknown;
-    try {
-      const body = (await response.json()) as { detail?: unknown };
-      detail = body.detail;
-    } catch {
-      detail = undefined;
-    }
-    throw new ApiError(response.status, detail);
+    throw new ApiError(response.status, await responseDetail(response));
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(`${apiBase}${path}`);
+  if (!response.ok) {
+    throw new ApiError(response.status, await responseDetail(response));
+  }
+  return response.blob();
+}
+
+async function responseDetail(response: Response): Promise<unknown> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return body.detail;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getHealth(signal?: AbortSignal): Promise<Health> {
@@ -136,6 +220,31 @@ export function updateSource(sourceId: number, source: SourceUpdate): Promise<So
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(source),
   });
+}
+
+export function createDoiMetadataLookup(sourceId: number): Promise<DoiMetadataLookup> {
+  return request<DoiMetadataLookup>(`/api/sources/${sourceId}/doi-metadata-lookups`, {
+    method: "POST",
+  });
+}
+
+export function applyDoiMetadataLookup(
+  sourceId: number,
+  lookupId: number,
+  fields: DoiMetadataField[],
+): Promise<SourceDetail> {
+  return request<SourceDetail>(
+    `/api/sources/${sourceId}/doi-metadata-lookups/${lookupId}/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields }),
+    },
+  );
+}
+
+export function removeSource(sourceId: number): Promise<void> {
+  return request<void>(`/api/sources/${sourceId}`, { method: "DELETE" });
 }
 
 export function createSource(sourceType: Exclude<SourceType, "other">, title: string): Promise<Source> {
@@ -159,6 +268,19 @@ export function createDocumentImport(
     method: "POST",
     body: form,
   });
+}
+
+export function createBibliographyImport(file: File): Promise<BibliographyImport> {
+  const form = new FormData();
+  form.append("bibliography", file);
+  return request<BibliographyImport>("/api/bibliography-imports", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function getBibliographyExport(format: BibliographyFormat): Promise<Blob> {
+  return requestBlob(`/api/bibliography-exports/${format}`);
 }
 
 export function convertAttachment(attachmentId: number): Promise<Attachment> {

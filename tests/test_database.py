@@ -16,6 +16,9 @@ from litrev.infrastructure.models import (
     AttachmentRecord,
     CollectionRecord,
     NoteRecord,
+    SourceCitationKeyRecord,
+    SourceIdentifierRecord,
+    SourceMetadataLookupRecord,
     SourceRecord,
     TagRecord,
 )
@@ -64,7 +67,7 @@ def test_migration_records_the_current_revision() -> None:
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "20260831_0006"
+    assert revision == "20260831_0008"
 
 
 def test_interrupted_conversion_result_migration_can_be_retried(
@@ -126,7 +129,7 @@ def test_interrupted_conversion_result_migration_can_be_retried(
     } <= columns_after_retry
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0006"
+    assert revision == "20260831_0008"
 
 
 def test_interrupted_source_metadata_migration_can_be_retried(
@@ -190,7 +193,7 @@ def test_interrupted_source_metadata_migration_can_be_retried(
         assert saved.reading_status == ReadingStatus.UNREAD.value
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0006"
+    assert revision == "20260831_0008"
 
 
 def test_interrupted_source_organization_migration_can_be_retried(
@@ -236,7 +239,180 @@ def test_interrupted_source_organization_migration_can_be_retried(
     } <= set(inspect(database.engine).get_table_names())
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260831_0008"
+
+
+def test_source_identifier_migration_preserves_existing_sources(tmp_path: Path) -> None:
+    database = Database.from_path(tmp_path / "source-identifiers.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0006")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO sources (title, created_at, source_type, authors, reading_status)
+            VALUES ('Existing source', '2026-08-31 00:00:00', 'paper', '[]', 'unread')
+            """
+        )
+
+    database.migrate()
+
+    schema = inspect(database.engine)
+    assert {"source_identifiers", "source_citation_keys"} <= set(schema.get_table_names())
+    identifier_unique_columns = {
+        tuple(constraint["column_names"])
+        for constraint in schema.get_unique_constraints("source_identifiers")
+    }
+    assert ("source_id", "identifier_type", "normalized_value") in identifier_unique_columns
+    citation_key_unique_columns = {
+        tuple(constraint["column_names"])
+        for constraint in schema.get_unique_constraints("source_citation_keys")
+    }
+    assert ("source_id", "bibliography_format", "value") in citation_key_unique_columns
+    with database.session() as session:
+        saved = session.query(SourceRecord).one()
+        assert saved.title == "Existing source"
+        assert saved.identifiers == []
+        assert saved.citation_keys == []
+
+
+def test_interrupted_source_identifier_migration_can_be_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = Database.from_path(tmp_path / "interrupted-identifiers.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0006")
+
+    original_create_table = Operations.create_table
+
+    def interrupt_after_identifier_table(
+        operations: Operations,
+        table_name: str,
+        *columns: object,
+        **kwargs: object,
+    ) -> object:
+        table = original_create_table(operations, table_name, *columns, **kwargs)
+        if table_name == "source_identifiers":
+            raise RuntimeError("simulated source-identifier migration interruption")
+        return table
+
+    with monkeypatch.context() as migration_patch:
+        migration_patch.setattr(Operations, "create_table", interrupt_after_identifier_table)
+        with pytest.raises(
+            RuntimeError,
+            match="simulated source-identifier migration interruption",
+        ):
+            database.migrate()
+
+    assert "source_identifiers" in inspect(database.engine).get_table_names()
+    assert "source_citation_keys" not in inspect(database.engine).get_table_names()
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     assert revision == "20260831_0006"
+
+    database.migrate()
+
+    assert {"source_identifiers", "source_citation_keys"} <= set(
+        inspect(database.engine).get_table_names()
+    )
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260831_0008"
+
+
+def test_metadata_provenance_migration_preserves_existing_sources(tmp_path: Path) -> None:
+    database = Database.from_path(tmp_path / "metadata-provenance.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0007")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO sources (title, doi, created_at, source_type, authors, reading_status)
+            VALUES (
+                'Existing source',
+                '10.1234/existing',
+                '2026-08-31 00:00:00',
+                'paper',
+                '[]',
+                'unread'
+            )
+            """
+        )
+
+    database.migrate()
+
+    schema = inspect(database.engine)
+    assert "source_metadata_lookups" in schema.get_table_names()
+    assert {column["name"] for column in schema.get_columns("source_metadata_lookups")} == {
+        "id",
+        "source_id",
+        "provider",
+        "provider_url",
+        "requested_doi",
+        "retrieved_doi",
+        "reviewed_metadata",
+        "proposed_metadata",
+        "retrieved_at",
+        "applied_fields",
+        "applied_at",
+    }
+    assert ("source_id",) in {
+        tuple(index["column_names"]) for index in schema.get_indexes("source_metadata_lookups")
+    }
+    with database.session() as session:
+        saved = session.query(SourceRecord).one()
+        assert saved.title == "Existing source"
+        assert saved.metadata_lookups == []
+
+
+def test_interrupted_metadata_provenance_migration_can_be_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database.from_path(tmp_path / "interrupted-metadata-provenance.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0007")
+
+    original_create_index = Operations.create_index
+
+    def interrupt_before_source_index(
+        operations: Operations,
+        index_name: str,
+        table_name: str,
+        columns: list[str],
+        **kwargs: object,
+    ) -> None:
+        if index_name == "ix_source_metadata_lookups_source_id":
+            raise RuntimeError("simulated metadata-provenance migration interruption")
+        original_create_index(operations, index_name, table_name, columns, **kwargs)
+
+    with monkeypatch.context() as migration_patch:
+        migration_patch.setattr(Operations, "create_index", interrupt_before_source_index)
+        with pytest.raises(
+            RuntimeError,
+            match="simulated metadata-provenance migration interruption",
+        ):
+            database.migrate()
+
+    assert "source_metadata_lookups" in inspect(database.engine).get_table_names()
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260831_0007"
+
+    database.migrate()
+
+    assert ("source_id",) in {
+        tuple(index["column_names"])
+        for index in inspect(database.engine).get_indexes("source_metadata_lookups")
+    }
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260831_0008"
 
 
 def test_source_organization_migration_rejects_an_incompatible_partial_schema(
@@ -344,7 +520,7 @@ def test_legacy_database_is_adopted_without_losing_records(tmp_path: Path) -> No
             session.commit()
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "20260831_0006"
+        assert revision == "20260831_0008"
     assert AttachmentRecord.__tablename__ in inspect(database.engine).get_table_names()
 
 
@@ -391,6 +567,81 @@ def test_source_and_linked_note_are_persisted() -> None:
         assert saved.language == "en"
         assert saved.reading_status == ReadingStatus.READING.value
         assert saved.notes[0].locator == "p. 7"
+
+
+def test_source_identifiers_and_citation_keys_are_source_owned() -> None:
+    database = Database.in_memory()
+    database.migrate()
+
+    with database.session() as session:
+        source = SourceRecord(
+            title="Identified source",
+            identifiers=[
+                SourceIdentifierRecord(
+                    identifier_type="pmid",
+                    value="12345",
+                    normalized_value="12345",
+                )
+            ],
+            citation_keys=[
+                SourceCitationKeyRecord(bibliography_format="bibtex", value="stable-key")
+            ],
+        )
+        session.add(source)
+        session.commit()
+        source_id = source.id
+
+    with database.session() as session:
+        saved = session.get(SourceRecord, source_id)
+        assert saved is not None
+        assert [(item.identifier_type, item.value) for item in saved.identifiers] == [
+            ("pmid", "12345")
+        ]
+        assert [(item.bibliography_format, item.value) for item in saved.citation_keys] == [
+            ("bibtex", "stable-key")
+        ]
+        session.execute(delete(SourceRecord).where(SourceRecord.id == source_id))
+        session.commit()
+
+    with database.session() as session:
+        assert session.scalar(select(SourceIdentifierRecord)) is None
+        assert session.scalar(select(SourceCitationKeyRecord)) is None
+
+
+def test_metadata_lookup_provenance_is_source_owned() -> None:
+    database = Database.in_memory()
+    database.migrate()
+
+    with database.session() as session:
+        source = SourceRecord(
+            title="Looked-up source",
+            doi="10.1234/example",
+            metadata_lookups=[
+                SourceMetadataLookupRecord(
+                    provider="Crossref",
+                    provider_url="https://api.crossref.org/works/10.1234%2Fexample",
+                    requested_doi="10.1234/example",
+                    retrieved_doi="10.1234/example",
+                    reviewed_metadata={"title": "Looked-up source"},
+                    proposed_metadata={"title": "Provider title"},
+                    applied_fields=["title"],
+                    applied_at=None,
+                )
+            ],
+        )
+        session.add(source)
+        session.commit()
+        source_id = source.id
+
+    with database.session() as session:
+        saved = session.get(SourceRecord, source_id)
+        assert saved is not None
+        assert saved.metadata_lookups[0].provider == "Crossref"
+        session.execute(delete(SourceRecord).where(SourceRecord.id == source_id))
+        session.commit()
+
+    with database.session() as session:
+        assert session.scalar(select(SourceMetadataLookupRecord)) is None
 
 
 def test_tags_and_collections_are_reusable_persistent_source_relationships(tmp_path: Path) -> None:

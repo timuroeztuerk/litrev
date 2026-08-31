@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -166,7 +167,7 @@ class StagedManagedArtifactRemoval:
                 self.directory.rmdir()
         except Exception as error:
             raise ManagedFileRecoveryError(
-                "A failed attachment removal could not restore its managed artifacts."
+                "A failed managed artifact removal could not restore every staged file."
             ) from error
 
     def discard(self) -> None:
@@ -177,7 +178,7 @@ class StagedManagedArtifactRemoval:
                 self.directory.rmdir()
         except Exception as error:
             raise ManagedFileCleanupError(
-                "The attachment record was removed, but staged artifact cleanup did not finish."
+                "The database record was removed, but staged artifact cleanup did not finish."
             ) from error
 
 
@@ -188,28 +189,45 @@ def stage_managed_attachment_removal(
     managed_path: str,
     extracted_path: str | None,
 ) -> StagedManagedArtifactRemoval:
-    attachment_store = ManagedAttachmentStore(paths)
-    expected_attachment = attachment_store.relative_path_for(checksum)
-    if managed_path != expected_attachment:
-        raise ManagedFileConflictError(
-            f"Attachment path {managed_path!r} does not match checksum {checksum!r}."
-        )
+    return stage_managed_attachment_removals(
+        paths,
+        attachments=[(checksum, managed_path, extracted_path)],
+    )
 
-    candidates = [(paths.root / expected_attachment, "original")]
-    if extracted_path is not None:
-        extraction_store = ManagedExtractionStore(paths)
-        expected_extraction = extraction_store.relative_path_for(checksum)
-        if extracted_path != expected_extraction:
+
+def stage_managed_attachment_removals(
+    paths: LibraryPaths,
+    *,
+    attachments: Iterable[tuple[str, str, str | None]],
+) -> StagedManagedArtifactRemoval:
+    attachment_store = ManagedAttachmentStore(paths)
+    extraction_store = ManagedExtractionStore(paths)
+    attachment_values = tuple(attachments)
+    candidates: list[tuple[Path, str, str]] = []
+    for index, (checksum, managed_path, extracted_path) in enumerate(attachment_values):
+        expected_attachment = attachment_store.relative_path_for(checksum)
+        if managed_path != expected_attachment:
             raise ManagedFileConflictError(
-                f"Extracted path {extracted_path!r} does not match checksum {checksum!r}."
+                f"Attachment path {managed_path!r} does not match checksum {checksum!r}."
             )
-        candidates.append((paths.root / expected_extraction, "extracted"))
+
+        name_prefix = f"{index}-" if len(attachment_values) > 1 else ""
+        candidates.append((paths.root / expected_attachment, "original", f"{name_prefix}original"))
+        if extracted_path is not None:
+            expected_extraction = extraction_store.relative_path_for(checksum)
+            if extracted_path != expected_extraction:
+                raise ManagedFileConflictError(
+                    f"Extracted path {extracted_path!r} does not match checksum {checksum!r}."
+                )
+            candidates.append(
+                (paths.root / expected_extraction, "extracted", f"{name_prefix}extracted")
+            )
 
     existing: list[tuple[Path, str]] = []
-    for artifact, label in candidates:
+    for artifact, label, staged_name in candidates:
         _require_safe_removal_path(paths.root, artifact, label)
         if artifact.exists():
-            existing.append((artifact, label))
+            existing.append((artifact, staged_name))
 
     if not existing:
         return StagedManagedArtifactRemoval(root=paths.root, directory=None, files=())

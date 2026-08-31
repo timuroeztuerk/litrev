@@ -79,6 +79,78 @@ class SourceRecord(Base):
         order_by="CollectionRecord.normalized_name",
         passive_deletes=True,
     )
+    identifiers: Mapped[list[SourceIdentifierRecord]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    citation_keys: Mapped[list[SourceCitationKeyRecord]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    metadata_lookups: Mapped[list[SourceMetadataLookupRecord]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class SourceIdentifierRecord(Base):
+    __tablename__ = "source_identifiers"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "identifier_type",
+            "normalized_value",
+            name="uq_source_identifiers_source_type_value",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    identifier_type: Mapped[str] = mapped_column(String(50))
+    value: Mapped[str] = mapped_column(String(500))
+    normalized_value: Mapped[str] = mapped_column(String(500))
+
+    source: Mapped[SourceRecord] = relationship(back_populates="identifiers")
+
+
+class SourceCitationKeyRecord(Base):
+    __tablename__ = "source_citation_keys"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "bibliography_format",
+            "value",
+            name="uq_source_citation_keys_source_format_value",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"))
+    bibliography_format: Mapped[str] = mapped_column(String(20))
+    value: Mapped[str] = mapped_column(String(500))
+
+    source: Mapped[SourceRecord] = relationship(back_populates="citation_keys")
+
+
+class SourceMetadataLookupRecord(Base):
+    __tablename__ = "source_metadata_lookups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    provider_url: Mapped[str] = mapped_column(String(2048))
+    requested_doi: Mapped[str] = mapped_column(String(255))
+    retrieved_doi: Mapped[str] = mapped_column(String(255))
+    reviewed_metadata: Mapped[dict[str, object]] = mapped_column(JSON)
+    proposed_metadata: Mapped[dict[str, object]] = mapped_column(JSON)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    applied_fields: Mapped[list[str] | None] = mapped_column(JSON)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    source: Mapped[SourceRecord] = relationship(back_populates="metadata_lookups")
 
 
 class TagRecord(Base):

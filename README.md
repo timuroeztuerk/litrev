@@ -20,17 +20,25 @@ be traced to its source and, where possible, an exact passage.
 The working vertical slice supports:
 
 - manual capture of books and papers;
-- viewing and editing bibliographic metadata and reading status;
+- viewing and editing bibliographic metadata, standard identifiers, and reading status;
 - finding saved sources by metadata, source type, reading status, year, or date added;
 - organizing sources with reusable tags and collections;
+- importing source metadata, identifiers, and record keys from BibTeX, RIS, and CSL JSON
+  bibliographies;
+- exporting the full library as UTF-8 BibTeX, RIS, or CSL JSON with preserved identifiers and
+  stable record keys;
+- explicitly looking up DOI metadata from Crossref, reviewing conflicts, applying selected fields,
+  and retaining provenance;
 - durable, deduplicated local document imports;
 - structured Markdown extraction with explicit failure states and retries;
-- reopening a source to inspect its attachments and extracted text; and
-- confirmed removal of failed attachments with safeguarded file cleanup.
+- reopening a source to inspect its attachments and extracted text;
+- confirmed removal of failed attachments with safeguarded file cleanup; and
+- explicit source deletion with relationship and managed-file cleanup safeguards.
 
-Visual PDF reading, annotations, bibliography exchange, source deletion, research maps,
-distributable packaging, and AI assistance are not implemented yet. Work is continuing on
-[useful library metadata](docs/ROADMAP.md#2-useful-library-and-metadata).
+Visual PDF reading, annotations, research maps, distributable packaging, and AI assistance are not
+implemented yet. The useful-library milestone is complete; the next bounded follow-up is
+[DOI-first source capture](docs/ROADMAP.md#21-doi-first-source-capture), followed by reader locators
+and annotations.
 
 ## Architecture
 
@@ -124,6 +132,16 @@ ignored as a second safeguard. Ignore rules are not encryption and do not untrac
 Selecting a document does not copy it. Confirming an import saves the original under
 `attachments/`; successful extraction saves Markdown under `extracted/`.
 
+Deleting a source requires explicit confirmation and removes its owned database records and
+managed originals and extracted text. Litrev stages managed files before committing the database
+deletion so a database failure can restore them; an incomplete post-commit cleanup is reported
+instead of presenting the source as recoverable.
+
+DOI metadata lookup is opt-in. Clicking **Look up DOI metadata** sends the source DOI to Crossref;
+opening or editing a source does not make that network request. Litrev shows provider values beside
+saved values, leaves conflicts for the user to select, applies only selected fields, and records
+the provider link and applied fields as local provenance.
+
 When developing migrations, use an isolated library and never run Alembic commands against the
 real one.
 
@@ -149,6 +167,11 @@ recover files or records deleted before that backup was made.
 | `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
 | `POST` | `/api/sources` | Create a manual book or paper |
 | `PUT` | `/api/sources/{source_id}` | Replace a source's validated metadata and organization |
+| `DELETE` | `/api/sources/{source_id}` | Remove a source, its relationships, and managed files |
+| `POST` | `/api/sources/{source_id}/doi-metadata-lookups` | Retrieve a reviewable Crossref proposal for the saved DOI |
+| `POST` | `/api/sources/{source_id}/doi-metadata-lookups/{lookup_id}/apply` | Apply explicitly selected proposal fields and save provenance |
+| `POST` | `/api/bibliography-imports` | Import source metadata from BibTeX, RIS, or CSL JSON |
+| `GET` | `/api/bibliography-exports/{format}` | Download the full library as `bibtex`, `ris`, or `csl-json` |
 | `POST` | `/api/imports` | Save a source and original document |
 | `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown |
 | `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
@@ -166,6 +189,10 @@ npm run lint:web
 npm run build:web
 mise exec -- cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+These automated checks are the default verification path for agent-driven changes. Interactive
+browser QA is opt-in: agents should not launch or control a browser for visual inspection unless
+the user specifically requests it.
 
 ## Project guidance
 
