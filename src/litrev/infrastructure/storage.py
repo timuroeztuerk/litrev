@@ -101,6 +101,16 @@ class ManagedAttachmentStore:
             )
         return data
 
+    def verified_file_for(self, checksum: str, managed_path: str) -> Path:
+        attachment_path = self.file_for(checksum, managed_path)
+        with attachment_path.open("rb") as attachment_file:
+            actual_checksum = hashlib.file_digest(attachment_file, "sha256").hexdigest()
+        if actual_checksum != checksum:
+            raise ManagedFileConflictError(
+                f"Managed attachment {managed_path!r} does not match its checksum."
+            )
+        return attachment_path
+
     def file_for(self, checksum: str, managed_path: str) -> Path:
         expected_path = self.relative_path_for(checksum)
         if managed_path != expected_path:
@@ -109,6 +119,7 @@ class ManagedAttachmentStore:
             )
 
         attachment_path = self.paths.root / expected_path
+        _require_safe_managed_path(self.paths.root, attachment_path, "attachment")
         _require_regular_file(attachment_path, expected_path)
         return attachment_path
 
@@ -156,7 +167,7 @@ class StagedManagedArtifactRemoval:
     def restore(self) -> None:
         try:
             for original, staged in reversed(self.files):
-                _require_safe_removal_path(self.root, original, "restore destination")
+                _require_safe_managed_path(self.root, original, "restore destination")
                 if original.exists():
                     raise ManagedFileConflictError(
                         f"Cannot restore managed artifact {original.name!r}; its path is occupied."
@@ -225,7 +236,7 @@ def stage_managed_attachment_removals(
 
     existing: list[tuple[Path, str]] = []
     for artifact, label, staged_name in candidates:
-        _require_safe_removal_path(paths.root, artifact, label)
+        _require_safe_managed_path(paths.root, artifact, label)
         if artifact.exists():
             existing.append((artifact, staged_name))
 
@@ -256,7 +267,7 @@ def stage_managed_attachment_removals(
     )
 
 
-def _require_safe_removal_path(root: Path, artifact: Path, label: str) -> None:
+def _require_safe_managed_path(root: Path, artifact: Path, label: str) -> None:
     try:
         artifact.relative_to(root)
     except ValueError as error:

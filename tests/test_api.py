@@ -11,6 +11,7 @@ from litrev.domain.documents import ConversionStatus
 from litrev.domain.sources import SourceType
 from litrev.infrastructure.database import Database
 from litrev.infrastructure.models import (
+    AttachmentRecord,
     CollectionRecord,
     SourceIdentifierRecord,
     SourceMetadataLookupRecord,
@@ -1039,6 +1040,356 @@ async def test_doi_metadata_preview_rejects_unusable_input_before_provider_call(
 
 
 @pytest.mark.anyio
+async def test_source_is_created_from_reviewed_doi_metadata_with_selected_fields() -> None:
+    database = Database.in_memory()
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        return doi_metadata(
+            identifiers=[
+                DoiMetadataIdentifier(identifier_type="isbn", value="978-0-306-40615-7"),
+                DoiMetadataIdentifier(identifier_type="ISBN", value="978-0-306-40615-7"),
+                DoiMetadataIdentifier(identifier_type="issn", value="2049-3630"),
+            ]
+        )
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "https://doi.org/10.1234/example"},
+        )
+        reviewed = preview.json()
+        created = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": reviewed["normalized_doi"],
+                "proposal_fingerprint": reviewed["proposal_fingerprint"],
+                "fields": ["identifiers", "authors", "title", "source_type"],
+            },
+        )
+        reopened = await client.get(f"/api/sources/{created.json()['id']}")
+
+    assert preview.status_code == 200
+    assert created.status_code == 201
+    source = created.json()
+    assert reopened.json() == source
+    assert source["source_type"] == "paper"
+    assert source["title"] == "Crossref title"
+    assert source["authors"] == ["Ada Lovelace", "Research Collective"]
+    assert source["doi"] == "10.1234/example"
+    assert source["publication_year"] is None
+    assert source["venue"] is None
+    assert source["url"] is None
+    assert source["abstract"] is None
+    assert source["language"] is None
+    assert source["identifiers"] == [
+        {"identifier_type": "isbn", "value": "978-0-306-40615-7"},
+        {"identifier_type": "issn", "value": "2049-3630"},
+    ]
+    assert source["metadata_provenance"][0] == {
+        "lookup_id": source["metadata_provenance"][0]["lookup_id"],
+        "provider": "Crossref",
+        "provider_url": "https://api.crossref.org/works/10.1234%2Fexample",
+        "requested_doi": "10.1234/example",
+        "retrieved_doi": "10.1234/example",
+        "retrieved_at": source["metadata_provenance"][0]["retrieved_at"],
+        "applied_fields": ["source_type", "title", "authors", "identifiers"],
+        "applied_at": source["metadata_provenance"][0]["applied_at"],
+    }
+    assert provider_calls == ["10.1234/example", "10.1234/example"]
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 1
+        lookup = session.query(SourceMetadataLookupRecord).one()
+        assert lookup.source_id == source["id"]
+        assert lookup.reviewed_metadata == {}
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_uses_other_when_provider_type_is_not_selected() -> None:
+    database = Database.in_memory()
+    application = create_app(database, doi_metadata_provider=lambda _doi: doi_metadata())
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        created = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": " https://doi.org/10.1234/example ",
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["title"],
+            },
+        )
+
+    assert created.status_code == 201
+    assert created.json()["source_type"] == "other"
+    assert created.json()["doi"] == "10.1234/example"
+    assert created.json()["authors"] == []
+    assert created.json()["metadata_provenance"][0]["applied_fields"] == ["title"]
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_requires_the_reviewed_provider_title() -> None:
+    database = Database.in_memory()
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        return doi_metadata(title=None)
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": preview.json()["normalized_doi"],
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["title"],
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "doi_metadata_missing_title"
+    assert provider_calls == ["10.1234/example", "10.1234/example"]
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 0
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_requires_title_selection_before_networking() -> None:
+    def unexpected_provider(_doi: str) -> DoiMetadata:
+        raise AssertionError("The provider must not be contacted without the required title field")
+
+    database = Database.in_memory()
+    application = create_app(database, doi_metadata_provider=unexpected_provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": "10.1234/example",
+                "proposal_fingerprint": "untrusted",
+                "fields": ["authors"],
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "doi_metadata_title_required"
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 0
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_returns_a_new_review_when_provider_data_changed() -> None:
+    database = Database.in_memory()
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        return doi_metadata(title="Original title" if len(provider_calls) == 1 else "Changed title")
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": preview.json()["normalized_doi"],
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["title", "authors"],
+            },
+        )
+
+    assert rejected.status_code == 409
+    detail = rejected.json()["detail"]
+    assert detail["code"] == "doi_metadata_changed"
+    assert detail["preview"]["kind"] == "proposal"
+    assert detail["preview"]["proposal"]["title"] == "Changed title"
+    assert detail["preview"]["proposal_fingerprint"] != preview.json()["proposal_fingerprint"]
+    assert provider_calls == ["10.1234/example", "10.1234/example"]
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 0
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_provider_failure_saves_nothing() -> None:
+    database = Database.in_memory()
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        if len(provider_calls) == 2:
+            raise DoiMetadataUnavailableError("Crossref is temporarily unavailable.")
+        return doi_metadata()
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": preview.json()["normalized_doi"],
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["title"],
+            },
+        )
+
+    assert rejected.status_code == 503
+    assert rejected.json()["detail"] == {
+        "code": "doi_metadata_unavailable",
+        "message": "Crossref is temporarily unavailable.",
+    }
+    assert provider_calls == ["10.1234/example", "10.1234/example"]
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 0
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_returns_the_source_added_during_provider_refresh(
+    tmp_path: Path,
+) -> None:
+    database = Database.from_path(tmp_path / "litrev.sqlite3")
+    existing_source_ids: list[int] = []
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        if len(provider_calls) == 2:
+            with database.session() as session:
+                source = SourceRecord(
+                    source_type=SourceType.BOOK.value,
+                    title="Created during refresh",
+                    doi="10.1234/EXAMPLE",
+                )
+                session.add(source)
+                session.commit()
+                existing_source_ids.append(source.id)
+        return doi_metadata()
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": preview.json()["normalized_doi"],
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["title"],
+            },
+        )
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == {
+        "code": "doi_already_exists",
+        "message": "A source with this DOI already exists.",
+        "existing_source": {
+            "id": existing_source_ids[0],
+            "source_type": "book",
+            "title": "Created during refresh",
+            "doi": "10.1234/EXAMPLE",
+        },
+    }
+    assert provider_calls == ["10.1234/example", "10.1234/example"]
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 1
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_source_creation_rolls_back_source_and_provenance_on_commit_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database.in_memory()
+    application = create_app(database, doi_metadata_provider=lambda _doi: doi_metadata())
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/example"},
+        )
+        original_session_factory = database.session
+
+        def failing_session_factory():
+            session = original_session_factory()
+
+            def fail_commit() -> None:
+                raise RuntimeError("simulated database failure")
+
+            session.commit = fail_commit
+            return session
+
+        monkeypatch.setattr(database, "session", failing_session_factory)
+        rejected = await client.post(
+            "/api/sources/from-doi",
+            json={
+                "doi": preview.json()["normalized_doi"],
+                "proposal_fingerprint": preview.json()["proposal_fingerprint"],
+                "fields": ["source_type", "title", "identifiers"],
+            },
+        )
+        monkeypatch.setattr(database, "session", original_session_factory)
+
+    assert rejected.status_code == 500
+    assert rejected.json()["detail"] == {
+        "code": "doi_source_creation_failed",
+        "message": "The source could not be saved; no source or provenance was added.",
+    }
+    with database.session() as session:
+        assert session.query(SourceRecord).count() == 0
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
 async def test_doi_metadata_is_reviewed_before_selected_fields_are_applied() -> None:
     database = Database.in_memory()
     provider_calls: list[str] = []
@@ -1207,6 +1558,67 @@ async def test_doi_metadata_apply_rejects_fields_changed_after_review() -> None:
     assert reopened.json() == edited.json()
     assert reopened.json()["title"] == "New user edit"
     assert reopened.json()["metadata_provenance"] == []
+
+
+@pytest.mark.anyio
+async def test_doi_metadata_apply_rejects_a_review_for_the_sources_previous_doi() -> None:
+    database = Database.in_memory()
+    application = create_app(
+        database,
+        doi_metadata_provider=lambda _doi: doi_metadata(doi="10.1234/first"),
+    )
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        created = await client.post(
+            "/api/sources",
+            json={
+                "source_type": "paper",
+                "title": "Original title",
+                "doi": "10.1234/first",
+            },
+        )
+        source_id = created.json()["id"]
+        lookup = await client.post(f"/api/sources/{source_id}/doi-metadata-lookups")
+        edited = await client.put(
+            f"/api/sources/{source_id}",
+            json=source_update_payload(
+                title="Original title",
+                authors=[],
+                publication_year=None,
+                venue=None,
+                doi="10.1234/second",
+                url=None,
+                abstract=None,
+                language=None,
+                reading_status="unread",
+            ),
+        )
+        rejected = await client.post(
+            f"/api/sources/{source_id}/doi-metadata-lookups/{lookup.json()['id']}/apply",
+            json={"fields": ["title"]},
+        )
+        reopened = await client.get(f"/api/sources/{source_id}")
+
+    assert lookup.status_code == 200
+    assert edited.status_code == 200
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == {
+        "code": "source_doi_changed",
+        "message": (
+            "The source DOI changed after this review. Look up the DOI again before applying "
+            "metadata."
+        ),
+    }
+    assert reopened.json() == edited.json()
+    assert reopened.json()["doi"] == "10.1234/second"
+    assert reopened.json()["metadata_provenance"] == []
+    with database.session() as session:
+        lookup_record = session.query(SourceMetadataLookupRecord).one()
+        assert lookup_record.applied_fields is None
+        assert lookup_record.applied_at is None
 
 
 @pytest.mark.anyio
@@ -1498,6 +1910,155 @@ async def test_import_can_be_converted_and_reopened(tmp_path: Path) -> None:
     assert reopened.json()["title"] == "A useful paper"
     assert reopened.json()["attachments"][0]["conversion_status"] == "succeeded"
     assert reopened.json()["attachments"][0]["has_extracted_text"] is True
+
+
+@pytest.mark.anyio
+async def test_reader_lists_and_streams_managed_pdfs(tmp_path: Path) -> None:
+    pdf = b"%PDF-1.4\nreader fixture\n%%EOF\n"
+    application = create_app(Database.from_library(LibraryPaths.from_root(tmp_path / "library")))
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        imported_pdf = await client.post(
+            "/api/imports",
+            data={"source_type": "paper", "title": "Readable paper"},
+            files={"document": ("reader.pdf", pdf, "application/pdf")},
+        )
+        imported_csv = await client.post(
+            "/api/imports",
+            data={"source_type": "paper", "title": "Tabular source"},
+            files={"document": ("data.csv", b"title,year\nExample,2026\n", "text/csv")},
+        )
+        documents = await client.get("/api/reader/documents")
+        attachment_id = imported_pdf.json()["attachment"]["id"]
+        content = await client.get(f"/api/attachments/{attachment_id}/content")
+        partial = await client.get(
+            f"/api/attachments/{attachment_id}/content",
+            headers={"Range": "bytes=0-3"},
+        )
+        rejected_csv = await client.get(
+            f"/api/attachments/{imported_csv.json()['attachment']['id']}/content"
+        )
+
+    assert imported_pdf.status_code == 201
+    assert imported_csv.status_code == 201
+    assert documents.status_code == 200
+    assert documents.json() == [
+        {
+            "attachment_id": attachment_id,
+            "source_id": imported_pdf.json()["source"]["id"],
+            "source_title": "Readable paper",
+            "original_filename": "reader.pdf",
+            "byte_size": len(pdf),
+        }
+    ]
+    assert content.status_code == 200
+    assert content.content == pdf
+    assert content.headers["content-type"] == "application/pdf"
+    assert content.headers["accept-ranges"] == "bytes"
+    assert content.headers["cache-control"] == "no-store"
+    assert content.headers["content-disposition"].startswith("inline;")
+    assert partial.status_code == 206
+    assert partial.content == b"%PDF"
+    assert partial.headers["content-range"] == f"bytes 0-3/{len(pdf)}"
+    assert rejected_csv.status_code == 415
+    assert rejected_csv.json()["detail"] == {
+        "code": "not_pdf",
+        "message": "Only PDF attachments can be opened in Reader.",
+    }
+
+
+@pytest.mark.anyio
+async def test_reader_preserves_a_pdf_record_when_its_managed_file_changed(tmp_path: Path) -> None:
+    paths = LibraryPaths.from_root(tmp_path / "library")
+    database = Database.from_library(paths)
+    application = create_app(database)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        imported = await client.post(
+            "/api/imports",
+            data={"source_type": "paper", "title": "Changed paper"},
+            files={
+                "document": (
+                    "changed.pdf",
+                    b"%PDF-1.4\noriginal\n%%EOF\n",
+                    "application/pdf",
+                )
+            },
+        )
+        attachment_id = imported.json()["attachment"]["id"]
+        with database.session() as session:
+            attachment = session.get(AttachmentRecord, attachment_id)
+            assert attachment is not None
+            managed_file = paths.root / attachment.managed_path
+        managed_file.write_bytes(b"%PDF-1.4\nchanged\n%%EOF\n")
+
+        rejected = await client.get(f"/api/attachments/{attachment_id}/content")
+        reopened = await client.get(f"/api/sources/{imported.json()['source']['id']}")
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == {
+        "code": "managed_file_conflict",
+        "message": "The saved PDF is missing or has changed.",
+    }
+    assert reopened.json()["attachments"][0]["id"] == attachment_id
+
+
+@pytest.mark.anyio
+async def test_reader_refuses_a_symlinked_managed_directory(tmp_path: Path) -> None:
+    paths = LibraryPaths.from_root(tmp_path / "library")
+    database = Database.from_library(paths)
+    application = create_app(database)
+    transport = httpx2.ASGITransport(app=application)
+    pdf = b"%PDF-1.4\noutside file\n%%EOF\n"
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        imported = await client.post(
+            "/api/imports",
+            data={"source_type": "paper", "title": "Unsafe paper"},
+            files={"document": ("unsafe.pdf", pdf, "application/pdf")},
+        )
+        attachment_id = imported.json()["attachment"]["id"]
+        with database.session() as session:
+            attachment = session.get(AttachmentRecord, attachment_id)
+            assert attachment is not None
+            managed_file = paths.root / attachment.managed_path
+
+        managed_file.unlink()
+        managed_file.parent.rmdir()
+        outside_directory = tmp_path / "outside"
+        outside_directory.mkdir()
+        (outside_directory / managed_file.name).write_bytes(pdf)
+        managed_file.parent.symlink_to(outside_directory, target_is_directory=True)
+
+        rejected = await client.get(f"/api/attachments/{attachment_id}/content")
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == {
+        "code": "managed_file_conflict",
+        "message": "The saved PDF is missing or has changed.",
+    }
+
+
+@pytest.mark.anyio
+async def test_reader_returns_not_found_for_an_unknown_attachment(tmp_path: Path) -> None:
+    application = create_app(Database.from_library(LibraryPaths.from_root(tmp_path / "library")))
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        response = await client.get("/api/attachments/999/content")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Attachment not found"
 
 
 @pytest.mark.anyio

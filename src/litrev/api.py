@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +33,7 @@ from litrev.infrastructure.models import (
 )
 from litrev.infrastructure.storage import (
     LibraryPaths,
+    ManagedAttachmentStore,
     ManagedFileCleanupError,
     ManagedFileConflictError,
     ManagedFileRecoveryError,
@@ -191,6 +193,14 @@ class AttachmentRead(BaseModel):
     updated_at: datetime
 
 
+class ReaderDocumentRead(BaseModel):
+    attachment_id: int
+    source_id: int
+    source_title: str
+    original_filename: str
+    byte_size: int
+
+
 class SourceDetailRead(SourceRead):
     attachments: list[AttachmentRead]
     metadata_provenance: list[DoiMetadataProvenanceRead]
@@ -268,6 +278,12 @@ class ProviderDoiMetadataPreviewRead(BaseModel):
     available_fields: list[DoiMetadataField]
 
 
+class DoiSourceCreate(BaseModel):
+    doi: str
+    proposal_fingerprint: str
+    fields: list[DoiMetadataField]
+
+
 class DoiMetadataApply(BaseModel):
     fields: list[DoiMetadataField]
 
@@ -320,6 +336,7 @@ def create_app(
         ],
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
     )
 
     @application.get("/api/health")
@@ -344,6 +361,18 @@ def create_app(
     @application.get("/api/sources/{source_id}", response_model=SourceDetailRead)
     async def get_source(source_id: int) -> SourceDetailRead:
         return _read_source_detail(active_database, source_id)
+
+    @application.get("/api/reader/documents", response_model=list[ReaderDocumentRead])
+    async def list_reader_documents() -> list[ReaderDocumentRead]:
+        with active_database.session() as session:
+            records = session.scalars(
+                select(AttachmentRecord)
+                .join(AttachmentRecord.source)
+                .options(selectinload(AttachmentRecord.source))
+                .where(AttachmentRecord.detected_format == "pdf")
+                .order_by(SourceRecord.title, AttachmentRecord.id)
+            )
+            return [_reader_document_read(record) for record in records]
 
     @application.put("/api/sources/{source_id}", response_model=SourceDetailRead)
     async def update_source(source_id: int, source: SourceUpdate) -> SourceDetailRead:
@@ -417,48 +446,131 @@ def create_app(
         normalized_doi = _normalize_doi_for_api(preview.doi)
 
         with active_database.session() as session:
-            existing_source = next(
-                (
-                    record
-                    for record in session.scalars(
-                        select(SourceRecord)
-                        .where(SourceRecord.doi.is_not(None))
-                        .order_by(SourceRecord.id)
-                    )
-                    if record.doi is not None and doi_key(record.doi) == doi_key(normalized_doi)
-                ),
-                None,
-            )
+            existing_source = _find_source_by_doi(session, normalized_doi)
             if existing_source is not None:
-                assert existing_source.doi is not None
                 return ExistingDoiMetadataPreviewRead(
                     kind="existing_source",
                     normalized_doi=normalized_doi,
-                    existing_source=ExistingDoiSourceRead(
-                        id=existing_source.id,
-                        source_type=SourceType(existing_source.source_type),
-                        title=existing_source.title,
-                        doi=existing_source.doi,
-                    ),
+                    existing_source=_existing_doi_source_read(existing_source),
                 )
 
         metadata = await _retrieve_doi_metadata(doi_metadata_provider, normalized_doi)
-        proposal = _doi_metadata_proposal(metadata)
-        return ProviderDoiMetadataPreviewRead(
-            kind="proposal",
-            normalized_doi=normalized_doi,
-            provider=CROSSREF_PROVIDER,
-            provider_url=crossref_record_url(metadata.doi),
-            retrieved_doi=metadata.doi,
-            retrieved_at=datetime.now(UTC),
-            proposal_fingerprint=_doi_metadata_proposal_fingerprint(
-                normalized_doi,
-                metadata,
-                proposal,
-            ),
-            proposal=proposal,
-            available_fields=_available_doi_metadata_fields(proposal),
+        return _provider_doi_metadata_preview(normalized_doi, metadata)
+
+    @application.post(
+        "/api/sources/from-doi",
+        response_model=SourceDetailRead,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_source_from_doi(creation: DoiSourceCreate) -> SourceDetailRead:
+        normalized_doi = _normalize_doi_for_api(creation.doi)
+        selected_fields = [field for field in _DOI_METADATA_FIELDS if field in creation.fields]
+        if "title" not in selected_fields:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "doi_metadata_title_required",
+                    "message": "Keep the provider title selected to add this source.",
+                },
+            )
+
+        with active_database.session() as session:
+            existing_source = _find_source_by_doi(session, normalized_doi)
+            if existing_source is not None:
+                raise _doi_source_exists_error(existing_source)
+
+        metadata = await _retrieve_doi_metadata(doi_metadata_provider, normalized_doi)
+        current_preview = _provider_doi_metadata_preview(normalized_doi, metadata)
+        if creation.proposal_fingerprint != current_preview.proposal_fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "doi_metadata_changed",
+                    "message": (
+                        "Crossref metadata changed since this review. Review the updated "
+                        "proposal before adding the source."
+                    ),
+                    "preview": current_preview.model_dump(mode="json"),
+                },
+            )
+
+        proposal = current_preview.proposal
+        if proposal.title is None or not proposal.title.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "doi_metadata_missing_title",
+                    "message": "Crossref has no usable title for this DOI, so it cannot be added.",
+                },
+            )
+        unavailable_fields = [
+            field for field in selected_fields if field not in current_preview.available_fields
+        ]
+        if unavailable_fields:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "unavailable_metadata_fields",
+                    "message": "The selected DOI metadata is not available from Crossref.",
+                    "fields": unavailable_fields,
+                },
+            )
+
+        record = SourceRecord(
+            source_type=SourceType.OTHER.value,
+            title=_clean_source_title(proposal.title),
+            doi=normalized_doi,
         )
+        _apply_doi_metadata_fields(record, proposal, selected_fields)
+        record.metadata_lookups.append(
+            SourceMetadataLookupRecord(
+                provider=current_preview.provider,
+                provider_url=current_preview.provider_url,
+                requested_doi=normalized_doi,
+                retrieved_doi=current_preview.retrieved_doi,
+                reviewed_metadata={},
+                proposed_metadata=proposal.model_dump(mode="json"),
+                retrieved_at=current_preview.retrieved_at,
+                applied_fields=selected_fields,
+                applied_at=datetime.now(UTC),
+            )
+        )
+
+        with active_database.session() as session:
+            existing_source = _find_source_by_doi(session, normalized_doi)
+            if existing_source is not None:
+                raise _doi_source_exists_error(existing_source)
+            session.add(record)
+            try:
+                session.commit()
+            except IntegrityError as error:
+                session.rollback()
+                existing_source = _find_source_by_doi(session, normalized_doi)
+                if existing_source is not None:
+                    raise _doi_source_exists_error(existing_source) from error
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "doi_source_creation_conflict",
+                        "message": (
+                            "The source conflicted with another library change; nothing was saved."
+                        ),
+                    },
+                ) from error
+            except Exception as error:
+                session.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "code": "doi_source_creation_failed",
+                        "message": (
+                            "The source could not be saved; no source or provenance was added."
+                        ),
+                    },
+                ) from error
+            source_id = record.id
+
+        return _read_source_detail(active_database, source_id)
 
     @application.post(
         "/api/sources/{source_id}/doi-metadata-lookups",
@@ -562,6 +674,21 @@ def create_app(
                     detail={
                         "code": "doi_metadata_already_applied",
                         "message": "This DOI metadata review has already been applied.",
+                    },
+                )
+            if (
+                record.doi is None
+                or doi_key(record.doi) != doi_key(lookup.requested_doi)
+                or doi_key(record.doi) != doi_key(lookup.retrieved_doi)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "source_doi_changed",
+                        "message": (
+                            "The source DOI changed after this review. Look up the DOI again "
+                            "before applying metadata."
+                        ),
                     },
                 )
 
@@ -911,6 +1038,57 @@ def create_app(
         return _attachment_read(converted)
 
     @application.get(
+        "/api/attachments/{attachment_id}/content",
+        response_class=FileResponse,
+    )
+    def get_pdf_content(attachment_id: int) -> FileResponse:
+        with active_database.session() as session:
+            record = session.get(AttachmentRecord, attachment_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="Attachment not found")
+            if record.detected_format != "pdf":
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail={
+                        "code": "not_pdf",
+                        "message": "Only PDF attachments can be opened in Reader.",
+                    },
+                )
+            checksum = record.checksum
+            managed_path = record.managed_path
+            filename = record.original_filename
+
+        if active_database.library_paths is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "library_storage_unavailable",
+                    "message": "The managed library storage is not available.",
+                },
+            )
+
+        try:
+            attachment_path = ManagedAttachmentStore(
+                active_database.library_paths
+            ).verified_file_for(checksum, managed_path)
+        except ManagedFileConflictError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "managed_file_conflict",
+                    "message": "The saved PDF is missing or has changed.",
+                },
+            ) from error
+
+        return FileResponse(
+            attachment_path,
+            media_type="application/pdf",
+            filename=filename,
+            content_disposition_type="inline",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.get(
         "/api/attachments/{attachment_id}/extracted-text",
         response_model=ExtractedTextRead,
     )
@@ -1023,6 +1201,41 @@ def _normalize_doi_for_api(doi: str) -> str:
         ) from error
 
 
+def _find_source_by_doi(session: Session, doi: str) -> SourceRecord | None:
+    requested_key = doi_key(doi)
+    return next(
+        (
+            record
+            for record in session.scalars(
+                select(SourceRecord).where(SourceRecord.doi.is_not(None)).order_by(SourceRecord.id)
+            )
+            if record.doi is not None and doi_key(record.doi) == requested_key
+        ),
+        None,
+    )
+
+
+def _existing_doi_source_read(record: SourceRecord) -> ExistingDoiSourceRead:
+    assert record.doi is not None
+    return ExistingDoiSourceRead(
+        id=record.id,
+        source_type=SourceType(record.source_type),
+        title=record.title,
+        doi=record.doi,
+    )
+
+
+def _doi_source_exists_error(record: SourceRecord) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "doi_already_exists",
+            "message": "A source with this DOI already exists.",
+            "existing_source": _existing_doi_source_read(record).model_dump(mode="json"),
+        },
+    )
+
+
 async def _retrieve_doi_metadata(
     provider: Callable[[str], DoiMetadata],
     doi: str,
@@ -1077,6 +1290,28 @@ def _doi_metadata_proposal(metadata: DoiMetadata) -> DoiMetadataProposalRead:
             if metadata.identifiers is not None
             else None
         ),
+    )
+
+
+def _provider_doi_metadata_preview(
+    requested_doi: str,
+    metadata: DoiMetadata,
+) -> ProviderDoiMetadataPreviewRead:
+    proposal = _doi_metadata_proposal(metadata)
+    return ProviderDoiMetadataPreviewRead(
+        kind="proposal",
+        normalized_doi=requested_doi,
+        provider=CROSSREF_PROVIDER,
+        provider_url=crossref_record_url(metadata.doi),
+        retrieved_doi=metadata.doi,
+        retrieved_at=datetime.now(UTC),
+        proposal_fingerprint=_doi_metadata_proposal_fingerprint(
+            requested_doi,
+            metadata,
+            proposal,
+        ),
+        proposal=proposal,
+        available_fields=_available_doi_metadata_fields(proposal),
     )
 
 
@@ -1667,6 +1902,16 @@ def _attachment_read(record: AttachmentRecord) -> AttachmentRead:
         can_remove=can_remove_attachment(record),
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _reader_document_read(record: AttachmentRecord) -> ReaderDocumentRead:
+    return ReaderDocumentRead(
+        attachment_id=record.id,
+        source_id=record.source_id,
+        source_title=record.source.title,
+        original_filename=record.original_filename,
+        byte_size=record.byte_size,
     )
 
 

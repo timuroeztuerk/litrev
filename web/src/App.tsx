@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -8,11 +8,14 @@ import {
   convertAttachment,
   createBibliographyImport,
   createDoiMetadataLookup,
+  createDoiMetadataPreview,
   createDocumentImport,
   createSource,
+  createSourceFromDoi,
   getBibliographyExport,
   getExtractedText,
   getHealth,
+  getReaderDocuments,
   getSource,
   getSources,
   removeAttachment,
@@ -24,8 +27,12 @@ import {
   type ConversionStatus,
   type DoiMetadataField,
   type DoiMetadataLookup,
+  type DoiMetadataPreview,
+  type DoiMetadataProposal,
+  type ExistingDoiSource,
   type ExtractedText,
   type ReadingStatus,
+  type ReaderDocument,
   type Source,
   type SourceDetail,
   type SourceIdentifier,
@@ -34,17 +41,24 @@ import {
 } from "./api";
 import "./styles.css";
 
+const ReaderScreen = lazy(async () => {
+  const module = await import("./Reader");
+  return { default: module.ReaderScreen };
+});
+
 const themeStorageKey = "litrev-theme";
 const serviceStartupTimeoutMs = 5_000;
 type CapturableSourceType = Exclude<SourceType, "other">;
 type ImportStage = "idle" | "selected" | "saving" | "converting";
 type FeedbackKind = "error" | "success" | "warning";
 type DiscoverySort = "title" | "publication-year" | "recently-added";
+type CaptureMode = "title" | "doi";
+type ProviderDoiMetadataPreview = Extract<DoiMetadataPreview, { kind: "proposal" }>;
 
 const sourceTypeLabels: Record<SourceType, string> = {
   paper: "Paper",
   book: "Book",
-  other: "Source",
+  other: "Other",
 };
 
 const readingStatusLabels: Record<ReadingStatus, string> = {
@@ -213,10 +227,10 @@ function doiMetadataSourceValue(source: Source, field: DoiMetadataField): string
 }
 
 function doiMetadataProposalValue(
-  lookup: DoiMetadataLookup,
+  review: { proposal: DoiMetadataProposal },
   field: DoiMetadataField,
 ): string {
-  const value = lookup.proposal[field];
+  const value = review.proposal[field];
   if (field === "source_type" && typeof value === "string") {
     return sourceTypeLabels[value as SourceType];
   }
@@ -261,7 +275,7 @@ function parseIdentifierDraft(value: string):
 }
 
 function sourceListDescription(source: Source): string {
-  const citation = [source.authors.join(", "), source.publication_year]
+  const citation = [source.authors.join(", "), source.publication_year, source.venue]
     .filter((value) => value !== "" && value !== null)
     .join(" · ");
   return citation || source.doi || "Metadata not added yet";
@@ -300,6 +314,458 @@ function detailForImport(source: Source, attachment: Attachment): SourceDetail {
   return { ...source, attachments: [attachment], metadata_provenance: [] };
 }
 
+function readerDocumentFrom(source: Source, attachment: Attachment): ReaderDocument {
+  return {
+    attachment_id: attachment.id,
+    source_id: source.id,
+    source_title: source.title,
+    original_filename: attachment.original_filename,
+    byte_size: attachment.byte_size,
+  };
+}
+
+function providerDoiPreviewFrom(value: unknown): ProviderDoiMetadataPreview | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("kind" in value) ||
+    value.kind !== "proposal" ||
+    !("normalized_doi" in value) ||
+    typeof value.normalized_doi !== "string" ||
+    !("provider" in value) ||
+    typeof value.provider !== "string" ||
+    !("provider_url" in value) ||
+    typeof value.provider_url !== "string" ||
+    !("retrieved_doi" in value) ||
+    typeof value.retrieved_doi !== "string" ||
+    !("retrieved_at" in value) ||
+    typeof value.retrieved_at !== "string" ||
+    !("proposal_fingerprint" in value) ||
+    typeof value.proposal_fingerprint !== "string" ||
+    !("proposal" in value) ||
+    typeof value.proposal !== "object" ||
+    value.proposal === null ||
+    !("available_fields" in value) ||
+    !Array.isArray(value.available_fields)
+  ) {
+    return null;
+  }
+  return value as ProviderDoiMetadataPreview;
+}
+
+function existingDoiSourceFrom(value: unknown): ExistingDoiSource | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "number" ||
+    !("source_type" in value) ||
+    typeof value.source_type !== "string" ||
+    !["paper", "book", "other"].includes(value.source_type) ||
+    !("title" in value) ||
+    typeof value.title !== "string" ||
+    !("doi" in value) ||
+    typeof value.doi !== "string"
+  ) {
+    return null;
+  }
+  return value as ExistingDoiSource;
+}
+
+interface DoiMetadataFieldsProps {
+  busy: boolean;
+  conflictingFields?: DoiMetadataField[];
+  currentSource?: Source;
+  legend: string;
+  onToggle: (field: DoiMetadataField) => void;
+  provider: string;
+  requiredFields?: DoiMetadataField[];
+  review: {
+    proposal: DoiMetadataProposal;
+    available_fields: DoiMetadataField[];
+  };
+  selectedFields: DoiMetadataField[];
+}
+
+function DoiMetadataFields({
+  busy,
+  conflictingFields = [],
+  currentSource,
+  legend,
+  onToggle,
+  provider,
+  requiredFields = [],
+  review,
+  selectedFields,
+}: DoiMetadataFieldsProps) {
+  return (
+    <fieldset className="doi-field-list">
+      <legend>{legend}</legend>
+      {review.available_fields.map((field) => {
+        const conflicts = conflictingFields.includes(field);
+        const required = requiredFields.includes(field);
+        return (
+          <label className={conflicts ? "doi-field conflict" : "doi-field"} key={field}>
+            <span className="doi-field-choice">
+              <input
+                checked={selectedFields.includes(field)}
+                disabled={busy || required}
+                onChange={() => onToggle(field)}
+                type="checkbox"
+              />
+              <strong>{doiMetadataFieldLabels[field]}</strong>
+              {required && <span className="doi-required-label">Required</span>}
+              {conflicts && <span className="doi-conflict-label">Conflict</span>}
+            </span>
+            <span className={`doi-field-comparison${currentSource ? "" : " single"}`}>
+              {currentSource && (
+                <span>
+                  <small>Current</small>
+                  {doiMetadataSourceValue(currentSource, field)}
+                </span>
+              )}
+              <span>
+                <small>{provider}</small>
+                {doiMetadataProposalValue(review, field)}
+              </span>
+            </span>
+            {currentSource && field === "identifiers" && (
+              <span className="doi-merge-note">
+                Selected identifiers are added without removing saved identifiers.
+              </span>
+            )}
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
+interface DoiCaptureFormProps {
+  onBusyChange: (busy: boolean) => void;
+  onCreated: (source: SourceDetail) => void;
+  onOpenExisting: (sourceId: number) => Promise<boolean>;
+  serviceReady: boolean;
+}
+
+function DoiCaptureForm({
+  onBusyChange,
+  onCreated,
+  onOpenExisting,
+  serviceReady,
+}: DoiCaptureFormProps) {
+  const [doi, setDoi] = useState("");
+  const [preview, setPreview] = useState<DoiMetadataPreview | null>(null);
+  const [selectedFields, setSelectedFields] = useState<DoiMetadataField[]>([]);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [isDoiInvalid, setIsDoiInvalid] = useState(false);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isOpeningExisting, setIsOpeningExisting] = useState(false);
+  const doiInput = useRef<HTMLInputElement>(null);
+  const lookupButton = useRef<HTMLButtonElement>(null);
+  const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const existingHeading = useRef<HTMLHeadingElement>(null);
+  const createButton = useRef<HTMLButtonElement>(null);
+  const openExistingButton = useRef<HTMLButtonElement>(null);
+  const busy = isLookingUp || isCreating || isOpeningExisting;
+
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+
+  useEffect(() => {
+    if (preview?.kind === "proposal") reviewHeading.current?.focus();
+    if (preview?.kind === "existing_source") existingHeading.current?.focus();
+  }, [preview]);
+
+  function selectedFieldsFor(
+    proposal: ProviderDoiMetadataPreview,
+    previous?: DoiMetadataField[],
+  ): DoiMetadataField[] {
+    const available = previous
+      ? previous.filter((field) => proposal.available_fields.includes(field))
+      : [...proposal.available_fields];
+    if (proposal.available_fields.includes("title") && !available.includes("title")) {
+      available.push("title");
+    }
+    return available;
+  }
+
+  function resetReview() {
+    setPreview(null);
+    setSelectedFields([]);
+    setFeedback(null);
+    setIsDoiInvalid(false);
+  }
+
+  function editDoi(value: string) {
+    setDoi(value);
+    resetReview();
+  }
+
+  async function lookupDoi(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!serviceReady || busy) return;
+    if (!doi.trim()) {
+      setFeedback({ kind: "error", message: "Enter a DOI to look up." });
+      setIsDoiInvalid(true);
+      doiInput.current?.focus();
+      return;
+    }
+
+    setIsLookingUp(true);
+    setFeedback(null);
+    setIsDoiInvalid(false);
+    setPreview(null);
+    setSelectedFields([]);
+    try {
+      const result = await createDoiMetadataPreview(doi);
+      setPreview(result);
+      if (result.kind === "proposal") {
+        setDoi(result.normalized_doi);
+        setSelectedFields(selectedFieldsFor(result));
+        if (!result.available_fields.includes("title")) {
+          setFeedback({
+            kind: "error",
+            message: "Crossref has no usable title for this DOI, so it cannot be added.",
+          });
+        }
+      } else {
+        setDoi(result.normalized_doi);
+        setFeedback({
+          kind: "warning",
+          message: "This DOI is already in your library. Open the saved source instead.",
+        });
+      }
+    } catch (error) {
+      const problem = problemFrom(error);
+      setIsDoiInvalid(problem?.code === "invalid_doi");
+      setFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "DOI metadata could not be retrieved. Check the local service and try again.",
+        ),
+      });
+      window.requestAnimationFrame(() => {
+        if (problem?.code === "invalid_doi") doiInput.current?.focus();
+        else lookupButton.current?.focus();
+      });
+    } finally {
+      setIsLookingUp(false);
+    }
+  }
+
+  function toggleField(field: DoiMetadataField) {
+    if (field === "title") return;
+    setSelectedFields((current) =>
+      current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
+    );
+    if (preview?.kind !== "proposal" || preview.available_fields.includes("title")) {
+      setFeedback(null);
+    }
+  }
+
+  function cancelReview() {
+    resetReview();
+    window.requestAnimationFrame(() => lookupButton.current?.focus());
+  }
+
+  async function addReviewedSource() {
+    if (preview?.kind !== "proposal" || busy) return;
+    if (!preview.available_fields.includes("title") || !selectedFields.includes("title")) {
+      setFeedback({
+        kind: "error",
+        message: "Crossref has no usable title for this DOI, so it cannot be added.",
+      });
+      reviewHeading.current?.focus();
+      return;
+    }
+
+    setIsCreating(true);
+    setFeedback(null);
+    try {
+      const source = await createSourceFromDoi({
+        doi: preview.normalized_doi,
+        proposal_fingerprint: preview.proposal_fingerprint,
+        fields: selectedFields,
+      });
+      onCreated(source);
+    } catch (error) {
+      const problem = problemFrom(error);
+      const changedPreview =
+        problem?.code === "doi_metadata_changed"
+          ? providerDoiPreviewFrom(problem.preview)
+          : null;
+      const existingSource =
+        problem?.code === "doi_already_exists"
+          ? existingDoiSourceFrom(problem.existing_source)
+          : null;
+      if (changedPreview) {
+        setPreview(changedPreview);
+        setDoi(changedPreview.normalized_doi);
+        setSelectedFields((current) => selectedFieldsFor(changedPreview, current));
+        setFeedback(
+          changedPreview.available_fields.includes("title")
+            ? {
+                kind: "warning",
+                message:
+                  problem?.message ??
+                  "Crossref metadata changed. Review the updated proposal before adding the source.",
+              }
+            : {
+                kind: "error",
+                message: "Crossref now has no usable title for this DOI, so it cannot be added.",
+              },
+        );
+      } else if (existingSource) {
+        setPreview({
+          kind: "existing_source",
+          normalized_doi: preview.normalized_doi,
+          existing_source: existingSource,
+        });
+        setSelectedFields([]);
+        setFeedback({
+          kind: "warning",
+          message: problem?.message ?? "This DOI is already in your library.",
+        });
+      } else {
+        setFeedback({
+          kind: "error",
+          message: apiFailureMessage(
+            error,
+            "The source could not be added. Review the metadata and try again.",
+          ),
+        });
+        window.requestAnimationFrame(() => createButton.current?.focus());
+      }
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function openExistingSource() {
+    if (preview?.kind !== "existing_source" || busy) return;
+    setIsOpeningExisting(true);
+    setFeedback(null);
+    const opened = await onOpenExisting(preview.existing_source.id);
+    if (!opened) {
+      setFeedback({
+        kind: "error",
+        message: "The saved source could not be opened. Check the local service and try again.",
+      });
+      window.requestAnimationFrame(() => openExistingButton.current?.focus());
+    }
+    setIsOpeningExisting(false);
+  }
+
+  return (
+    <div className="doi-capture">
+      <form aria-busy={isLookingUp} className="title-capture-form" noValidate onSubmit={lookupDoi}>
+        <div className="capture-bar doi-capture-bar">
+          <div className="form-field">
+            <label className="visually-hidden" htmlFor="source-doi">
+              DOI
+            </label>
+            <input
+              aria-describedby={feedback ? "doi-capture-feedback" : undefined}
+              aria-invalid={isDoiInvalid}
+              autoComplete="off"
+              autoFocus
+              disabled={busy}
+              id="source-doi"
+              maxLength={255}
+              onChange={(event) => editDoi(event.target.value)}
+              placeholder="Enter a DOI, URL, or doi: value"
+              ref={doiInput}
+              value={doi}
+            />
+          </div>
+          <button disabled={!serviceReady || busy || preview !== null} ref={lookupButton} type="submit">
+            {isLookingUp ? "Looking up…" : "Look up DOI"}
+          </button>
+        </div>
+      </form>
+
+      {feedback && (
+        <p
+          className={`capture-feedback ${feedback.kind}`}
+          id="doi-capture-feedback"
+          role={feedback.kind === "error" ? "alert" : "status"}
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      {preview?.kind === "existing_source" && (
+        <div className="doi-existing-source">
+          <div>
+            <h3 ref={existingHeading} tabIndex={-1}>
+              DOI already in library
+            </h3>
+            <p>
+              <strong>{preview.existing_source.title}</strong>
+              <span>
+                {sourceTypeLabels[preview.existing_source.source_type]} · {preview.existing_source.doi}
+              </span>
+            </p>
+          </div>
+          <button
+            disabled={busy}
+            onClick={openExistingSource}
+            ref={openExistingButton}
+            type="button"
+          >
+            {isOpeningExisting ? "Opening…" : "Open existing source"}
+          </button>
+        </div>
+      )}
+
+      {preview?.kind === "proposal" && (
+        <div aria-busy={isCreating} className="doi-metadata-review doi-capture-review">
+          <div className="doi-review-intro">
+            <div>
+              <h3 ref={reviewHeading} tabIndex={-1}>
+                Review metadata from {preview.provider}
+              </h3>
+              <p>
+                Normalized DOI {preview.normalized_doi}. Retrieved {formatLookupDate(preview.retrieved_at)}
+                for DOI {preview.retrieved_doi}.
+              </p>
+            </div>
+            <a href={preview.provider_url} rel="noreferrer" target="_blank">
+              View provider record
+            </a>
+          </div>
+          <DoiMetadataFields
+            busy={isCreating}
+            legend="Choose metadata to save"
+            onToggle={toggleField}
+            provider={preview.provider}
+            requiredFields={["title"]}
+            review={preview}
+            selectedFields={selectedFields}
+          />
+          <div className="doi-review-actions">
+            <button
+              disabled={isCreating || !preview.available_fields.includes("title")}
+              onClick={addReviewedSource}
+              ref={createButton}
+              type="button"
+            >
+              {isCreating ? "Adding…" : "Add source"}
+            </button>
+            <button disabled={isCreating} onClick={cancelReview} type="button">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -316,6 +782,8 @@ export default function App() {
   const [title, setTitle] = useState("");
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [captureFeedback, setCaptureFeedback] = useState<Feedback | null>(null);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("title");
+  const [isDoiCaptureBusy, setIsDoiCaptureBusy] = useState(false);
   const [document, setDocument] = useState<File | null>(null);
   const [importSourceType, setImportSourceType] = useState<CapturableSourceType>("paper");
   const [importTitle, setImportTitle] = useState("");
@@ -344,6 +812,11 @@ export default function App() {
   const [textError, setTextError] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(loadDarkModePreference);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isReaderOpen, setIsReaderOpen] = useState(false);
+  const [readerDocuments, setReaderDocuments] = useState<ReaderDocument[]>([]);
+  const [selectedReaderDocument, setSelectedReaderDocument] = useState<ReaderDocument | null>(null);
+  const [isLoadingReaderDocuments, setIsLoadingReaderDocuments] = useState(false);
+  const [readerError, setReaderError] = useState<string | null>(null);
   const titleInput = useRef<HTMLInputElement>(null);
   const importTitleInput = useRef<HTMLInputElement>(null);
   const documentActionButton = useRef<HTMLButtonElement>(null);
@@ -351,10 +824,12 @@ export default function App() {
   const bibliographyInput = useRef<HTMLInputElement>(null);
   const bibliographyExportSelect = useRef<HTMLSelectElement>(null);
   const libraryHeading = useRef<HTMLHeadingElement>(null);
+  const readerHeading = useRef<HTMLHeadingElement>(null);
   const settingsHeading = useRef<HTMLHeadingElement>(null);
   const librarySearchInput = useRef<HTMLInputElement>(null);
   const filterToggleButton = useRef<HTMLButtonElement>(null);
   const sourceRequest = useRef(0);
+  const readerRequest = useRef(0);
   const textRequest = useRef(0);
   const serviceReady = serviceStatus === "ready";
   const isImporting = importStage === "saving" || importStage === "converting";
@@ -428,6 +903,10 @@ export default function App() {
   }, [isSettingsOpen]);
 
   useEffect(() => {
+    if (isReaderOpen) readerHeading.current?.focus();
+  }, [isReaderOpen]);
+
+  useEffect(() => {
     let active = true;
     const controller = new AbortController();
     const markServiceUnavailable = () => {
@@ -494,7 +973,10 @@ export default function App() {
 
   function showLibrary() {
     sourceRequest.current += 1;
+    readerRequest.current += 1;
     setIsSettingsOpen(false);
+    setIsReaderOpen(false);
+    setSelectedReaderDocument(null);
     setSelectedSource(null);
     setIsLoadingSource(false);
     setSourceError(null);
@@ -505,13 +987,76 @@ export default function App() {
 
   function showSettings() {
     sourceRequest.current += 1;
+    readerRequest.current += 1;
     setIsSettingsOpen(true);
+    setIsReaderOpen(false);
+    setSelectedReaderDocument(null);
     setSelectedSource(null);
     setIsLoadingSource(false);
     setSourceError(null);
     setDetailNotice(null);
     setLibraryNotice(null);
     resetExtractedText();
+  }
+
+  async function loadReaderDocuments() {
+    const requestId = readerRequest.current + 1;
+    readerRequest.current = requestId;
+    setIsLoadingReaderDocuments(true);
+    setReaderError(null);
+    try {
+      const documents = await getReaderDocuments();
+      if (readerRequest.current !== requestId) return;
+      setReaderDocuments(documents);
+    } catch {
+      if (readerRequest.current !== requestId) return;
+      setReaderError("The local PDF list could not be loaded. Check the service and try again.");
+    } finally {
+      if (readerRequest.current === requestId) setIsLoadingReaderDocuments(false);
+    }
+  }
+
+  function showReader() {
+    sourceRequest.current += 1;
+    setIsSettingsOpen(false);
+    setIsReaderOpen(true);
+    setSelectedReaderDocument(null);
+    setSelectedSource(null);
+    setIsLoadingSource(false);
+    setSourceError(null);
+    setDetailNotice(null);
+    setLibraryNotice(null);
+    resetExtractedText();
+    void loadReaderDocuments();
+  }
+
+  function openReaderDocument(document: ReaderDocument) {
+    setSelectedReaderDocument(document);
+    setReaderError(null);
+  }
+
+  function openAttachmentInReader(attachment: Attachment) {
+    if (!selectedSource) return;
+    const document = readerDocumentFrom(selectedSource, attachment);
+    sourceRequest.current += 1;
+    readerRequest.current += 1;
+    setReaderDocuments((current) => [
+      document,
+      ...current.filter((item) => item.attachment_id !== document.attachment_id),
+    ]);
+    setSelectedReaderDocument(document);
+    setIsSettingsOpen(false);
+    setIsReaderOpen(true);
+    setSelectedSource(null);
+    setIsLoadingSource(false);
+    setSourceError(null);
+    setDetailNotice(null);
+    resetExtractedText();
+  }
+
+  function showReaderDocuments() {
+    setSelectedReaderDocument(null);
+    void loadReaderDocuments();
   }
 
   async function openSource(sourceId: number): Promise<boolean> {
@@ -522,6 +1067,8 @@ export default function App() {
     setDetailNotice(null);
     setLibraryNotice(null);
     setIsSettingsOpen(false);
+    setIsReaderOpen(false);
+    setSelectedReaderDocument(null);
     resetExtractedText();
     try {
       const source = await getSource(sourceId);
@@ -580,6 +1127,26 @@ export default function App() {
     } finally {
       setIsSavingSource(false);
     }
+  }
+
+  function changeCaptureMode(mode: CaptureMode) {
+    setCaptureMode(mode);
+    setCaptureFeedback(null);
+    if (mode === "title") {
+      window.requestAnimationFrame(() => titleInput.current?.focus());
+    }
+  }
+
+  function showCreatedDoiSource(source: SourceDetail) {
+    sourceRequest.current += 1;
+    setSources((current) => [...current.filter((item) => item.id !== source.id), source]);
+    setSelectedSource(source);
+    setSourceError(null);
+    setLibraryNotice(null);
+    setDetailNotice({
+      kind: "success",
+      message: `Added “${source.title}” from Crossref.`,
+    });
   }
 
   async function handleDocumentImport(event: FormEvent<HTMLFormElement>) {
@@ -962,14 +1529,23 @@ export default function App() {
         </div>
         <nav aria-label="Workspace">
           <button
-            aria-current={isSettingsOpen ? undefined : "page"}
-            className={`nav-item ${isSettingsOpen ? "" : "active"}`}
+            aria-current={!isSettingsOpen && !isReaderOpen ? "page" : undefined}
+            className={`nav-item ${!isSettingsOpen && !isReaderOpen ? "active" : ""}`}
             disabled={isRemovingSource}
             onClick={showLibrary}
             type="button"
           >
             <span>Library</span>
             <span className="count">{sources.length}</span>
+          </button>
+          <button
+            aria-current={isReaderOpen ? "page" : undefined}
+            className={`nav-item reader-nav-item ${isReaderOpen ? "active" : ""}`}
+            disabled={isRemovingSource}
+            onClick={showReader}
+            type="button"
+          >
+            <span>Reader</span>
           </button>
         </nav>
         <div className="sidebar-footer">
@@ -991,24 +1567,34 @@ export default function App() {
 
       <div className="workspace">
         <header
-          className={`page-header ${!isSettingsOpen && !selectedSource ? "library-page-header" : ""}`}
+          className={`page-header ${!isSettingsOpen && !isReaderOpen && !selectedSource ? "library-page-header" : ""}`}
         >
           <div>
-            {(isSettingsOpen || selectedSource) && (
+            {(isSettingsOpen || isReaderOpen || selectedSource) && (
               <p className="eyebrow">
-                {isSettingsOpen ? "Application preferences" : "Source detail"}
+                {isSettingsOpen
+                  ? "Application preferences"
+                  : isReaderOpen
+                    ? "Local PDF workspace"
+                    : "Source detail"}
               </p>
             )}
             <h1
-              ref={isSettingsOpen ? settingsHeading : undefined}
-              tabIndex={isSettingsOpen ? -1 : undefined}
+              ref={isSettingsOpen ? settingsHeading : isReaderOpen ? readerHeading : undefined}
+              tabIndex={isSettingsOpen || isReaderOpen ? -1 : undefined}
             >
-              {isSettingsOpen ? "Settings" : (selectedSource?.title ?? "Your library")}
+              {isSettingsOpen
+                ? "Settings"
+                : isReaderOpen
+                  ? "Reader"
+                  : (selectedSource?.title ?? "Your library")}
             </h1>
-            {(isSettingsOpen || selectedSource) && (
+            {(isSettingsOpen || isReaderOpen || selectedSource) && (
               <p>
                 {isSettingsOpen
                   ? "Manage how Litrev works for you."
+                  : isReaderOpen
+                    ? "Open and read PDFs stored in your local library."
                   : "Review its metadata, saved documents, and extracted text."}
               </p>
             )}
@@ -1046,6 +1632,24 @@ export default function App() {
                 </svg>
               </button>
             </section>
+          ) : isReaderOpen ? (
+            <Suspense
+              fallback={
+                <p className="loading-message" role="status">
+                  Loading Reader…
+                </p>
+              }
+            >
+              <ReaderScreen
+                documents={readerDocuments}
+                error={readerError}
+                isLoading={isLoadingReaderDocuments}
+                onBackToDocuments={showReaderDocuments}
+                onOpenDocument={openReaderDocument}
+                onRetry={() => void loadReaderDocuments()}
+                selectedDocument={selectedReaderDocument}
+              />
+            </Suspense>
           ) : isLoadingSource ? (
             <p className="loading-message" role="status">
               Opening source…
@@ -1065,6 +1669,7 @@ export default function App() {
               onRetry={retryExtraction}
               onSaveMetadata={saveSourceMetadata}
               onLookupDoiMetadata={lookupSourceDoiMetadata}
+              onOpenReader={openAttachmentInReader}
               onToggleText={toggleExtractedText}
               removingAttachmentId={removingAttachmentId}
               retryingAttachmentId={retryingAttachmentId}
@@ -1077,65 +1682,97 @@ export default function App() {
                 <div className="capture-heading">
                   <p className="eyebrow">Quick capture</p>
                   <h2 id="capture-heading">Add a source</h2>
-                  <p>Enter a title, or start from a document on this device.</p>
+                  <p>Start with a title or DOI, or import a document from this device.</p>
                 </div>
-                <form
-                  aria-busy={isSavingSource}
-                  className="title-capture-form"
-                  noValidate
-                  onSubmit={handleSubmit}
-                >
-                  <div className="capture-bar">
-                    <div className="form-field">
-                      <label className="visually-hidden" htmlFor="source-type">
-                        Type
-                      </label>
-                      <select
-                        id="source-type"
-                        value={sourceType}
-                        onChange={(event) =>
-                          setSourceType(event.target.value as CapturableSourceType)
-                        }
-                        disabled={isSavingSource}
+                <fieldset className="capture-mode-switch">
+                  <legend>Start with</legend>
+                  <label>
+                    <input
+                      checked={captureMode === "title"}
+                      disabled={isSavingSource || isDoiCaptureBusy}
+                      name="capture-mode"
+                      onChange={() => changeCaptureMode("title")}
+                      type="radio"
+                    />
+                    Title first
+                  </label>
+                  <label>
+                    <input
+                      checked={captureMode === "doi"}
+                      disabled={isSavingSource || isDoiCaptureBusy}
+                      name="capture-mode"
+                      onChange={() => changeCaptureMode("doi")}
+                      type="radio"
+                    />
+                    DOI first
+                  </label>
+                </fieldset>
+                {captureMode === "title" ? (
+                  <form
+                    aria-busy={isSavingSource}
+                    className="title-capture-form"
+                    noValidate
+                    onSubmit={handleSubmit}
+                  >
+                    <div className="capture-bar">
+                      <div className="form-field">
+                        <label className="visually-hidden" htmlFor="source-type">
+                          Type
+                        </label>
+                        <select
+                          id="source-type"
+                          value={sourceType}
+                          onChange={(event) =>
+                            setSourceType(event.target.value as CapturableSourceType)
+                          }
+                          disabled={isSavingSource}
+                        >
+                          <option value="paper">Paper</option>
+                          <option value="book">Book</option>
+                        </select>
+                      </div>
+                      <div className="form-field">
+                        <label className="visually-hidden" htmlFor="source-title">
+                          Title
+                        </label>
+                        <input
+                          aria-describedby={captureFeedback ? "capture-feedback" : undefined}
+                          aria-invalid={captureFeedback?.kind === "error"}
+                          autoComplete="off"
+                          disabled={isSavingSource}
+                          id="source-title"
+                          maxLength={500}
+                          onChange={(event) => {
+                            setTitle(event.target.value);
+                            setCaptureFeedback(null);
+                          }}
+                          placeholder="Enter a book or paper title"
+                          ref={titleInput}
+                          value={title}
+                        />
+                      </div>
+                      <button disabled={!serviceReady || isSavingSource} type="submit">
+                        {isSavingSource ? "Adding…" : "Add source"}
+                      </button>
+                    </div>
+                    {captureFeedback && (
+                      <p
+                        className={`capture-feedback ${captureFeedback.kind}`}
+                        id="capture-feedback"
+                        role={captureFeedback.kind === "error" ? "alert" : "status"}
                       >
-                        <option value="paper">Paper</option>
-                        <option value="book">Book</option>
-                      </select>
-                    </div>
-                    <div className="form-field">
-                      <label className="visually-hidden" htmlFor="source-title">
-                        Title
-                      </label>
-                      <input
-                        aria-describedby={captureFeedback ? "capture-feedback" : undefined}
-                        aria-invalid={captureFeedback?.kind === "error"}
-                        autoComplete="off"
-                        disabled={isSavingSource}
-                        id="source-title"
-                        maxLength={500}
-                        onChange={(event) => {
-                          setTitle(event.target.value);
-                          setCaptureFeedback(null);
-                        }}
-                        placeholder="Enter a book or paper title"
-                        ref={titleInput}
-                        value={title}
-                      />
-                    </div>
-                    <button disabled={!serviceReady || isSavingSource} type="submit">
-                      {isSavingSource ? "Adding…" : "Add source"}
-                    </button>
-                  </div>
-                  {captureFeedback && (
-                    <p
-                      className={`capture-feedback ${captureFeedback.kind}`}
-                      id="capture-feedback"
-                      role={captureFeedback.kind === "error" ? "alert" : "status"}
-                    >
-                      {captureFeedback.message}
-                    </p>
-                  )}
-                </form>
+                        {captureFeedback.message}
+                      </p>
+                    )}
+                  </form>
+                ) : (
+                  <DoiCaptureForm
+                    onBusyChange={setIsDoiCaptureBusy}
+                    onCreated={showCreatedDoiSource}
+                    onOpenExisting={openSource}
+                    serviceReady={serviceReady}
+                  />
+                )}
 
                 <div className="document-action">
                   <div>
@@ -1613,7 +2250,17 @@ export default function App() {
                               </span>
                             )}
                           </span>
-                          <span className="source-kind">{sourceTypeLabels[source.source_type]}</span>
+                          <span className="source-row-aside">
+                            <span className="source-kind">
+                              {sourceTypeLabels[source.source_type]}
+                            </span>
+                            <span
+                              className="source-reading-status"
+                              data-status={source.reading_status}
+                            >
+                              {readingStatusLabels[source.reading_status]}
+                            </span>
+                          </span>
                         </button>
                       </li>
                     ))}
@@ -1645,6 +2292,7 @@ interface SourceDetailScreenProps {
   onRetry: (attachmentId: number) => Promise<void>;
   onSaveMetadata: (sourceId: number, metadata: SourceUpdate) => Promise<boolean>;
   onLookupDoiMetadata: (sourceId: number) => Promise<DoiMetadataLookup>;
+  onOpenReader: (attachment: Attachment) => void;
   onToggleText: (attachmentId: number) => Promise<void>;
   removingAttachmentId: number | null;
   retryingAttachmentId: number | null;
@@ -1665,6 +2313,7 @@ function SourceDetailScreen({
   onRetry,
   onSaveMetadata,
   onLookupDoiMetadata,
+  onOpenReader,
   onToggleText,
   removingAttachmentId,
   retryingAttachmentId,
@@ -2241,41 +2890,16 @@ function SourceDetailScreen({
                 View provider record
               </a>
             </div>
-            <fieldset className="doi-field-list">
-              <legend>Choose fields to apply</legend>
-              {doiLookup.available_fields.map((field) => {
-                const conflicts = doiLookup.conflicting_fields.includes(field);
-                return (
-                  <label className={conflicts ? "doi-field conflict" : "doi-field"} key={field}>
-                    <span className="doi-field-choice">
-                      <input
-                        checked={selectedDoiFields.includes(field)}
-                        disabled={isApplyingDoi}
-                        onChange={() => toggleDoiField(field)}
-                        type="checkbox"
-                      />
-                      <strong>{doiMetadataFieldLabels[field]}</strong>
-                      {conflicts && <span className="doi-conflict-label">Conflict</span>}
-                    </span>
-                    <span className="doi-field-comparison">
-                      <span>
-                        <small>Current</small>
-                        {doiMetadataSourceValue(source, field)}
-                      </span>
-                      <span>
-                        <small>Crossref</small>
-                        {doiMetadataProposalValue(doiLookup, field)}
-                      </span>
-                    </span>
-                    {field === "identifiers" && (
-                      <span className="doi-merge-note">
-                        Selected identifiers are added without removing saved identifiers.
-                      </span>
-                    )}
-                  </label>
-                );
-              })}
-            </fieldset>
+            <DoiMetadataFields
+              busy={isApplyingDoi}
+              conflictingFields={doiLookup.conflicting_fields}
+              currentSource={source}
+              legend="Choose fields to apply"
+              onToggle={toggleDoiField}
+              provider={doiLookup.provider}
+              review={doiLookup}
+              selectedFields={selectedDoiFields}
+            />
             <div className="doi-review-actions">
               <button
                 disabled={isApplyingDoi}
@@ -2347,6 +2971,15 @@ function SourceDetailScreen({
                   <p className="conversion-message">{attachment.conversion_message}</p>
                 )}
                 <div className="attachment-actions">
+                  {attachment.detected_format === "pdf" && (
+                    <button
+                      disabled={isRemovingSource}
+                      onClick={() => onOpenReader(attachment)}
+                      type="button"
+                    >
+                      Open in Reader
+                    </button>
+                  )}
                   {succeeded ? (
                     <button
                       disabled={loadingTextAttachmentId !== null || isRemovingSource}

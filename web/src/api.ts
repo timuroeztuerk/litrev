@@ -85,6 +85,14 @@ export interface Attachment {
   updated_at: string;
 }
 
+export interface ReaderDocument {
+  attachment_id: number;
+  source_id: number;
+  source_title: string;
+  original_filename: string;
+  byte_size: number;
+}
+
 export interface SourceDetail extends Source {
   attachments: Attachment[];
   metadata_provenance: DoiMetadataProvenance[];
@@ -149,6 +157,12 @@ export type DoiMetadataPreview =
       proposal: DoiMetadataProposal;
       available_fields: DoiMetadataField[];
     };
+
+export interface DoiSourceCreate {
+  doi: string;
+  proposal_fingerprint: string;
+  fields: DoiMetadataField[];
+}
 
 export interface ImportedDocument {
   source: Source;
@@ -239,6 +253,14 @@ export function getSource(sourceId: number): Promise<SourceDetail> {
   return request<SourceDetail>(`/api/sources/${sourceId}`);
 }
 
+export function getReaderDocuments(signal?: AbortSignal): Promise<ReaderDocument[]> {
+  return request<ReaderDocument[]>("/api/reader/documents", { signal });
+}
+
+export function getPdfContentUrl(attachmentId: number): string {
+  return `${apiBase}/api/attachments/${attachmentId}/content`;
+}
+
 export function updateSource(sourceId: number, source: SourceUpdate): Promise<SourceDetail> {
   return request<SourceDetail>(`/api/sources/${sourceId}`, {
     method: "PUT",
@@ -258,6 +280,14 @@ export function createDoiMetadataPreview(doi: string): Promise<DoiMetadataPrevie
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ doi }),
+  });
+}
+
+export function createSourceFromDoi(creation: DoiSourceCreate): Promise<SourceDetail> {
+  return request<SourceDetail>("/api/sources/from-doi", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(creation),
   });
 }
 

@@ -187,6 +187,18 @@ button {
   border-left-color: var(--sidebar-count);
 }
 
+.reader-nav-item {
+  min-height: 40px;
+  padding-left: 34px;
+  font-size: 12px;
+}
+
+.reader-nav-item span::before {
+  margin-right: 9px;
+  color: var(--sidebar-count);
+  content: "↳";
+}
+
 .nav-item:not(:disabled):hover {
   color: var(--sidebar-ink);
   background: rgb(21 34 76 / 65%);
@@ -409,6 +421,44 @@ textarea:focus-visible {
   line-height: 1.5;
 }
 
+.capture-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  margin: 16px 0 0;
+  border: 0;
+}
+
+.capture-mode-switch legend {
+  margin-right: 6px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.capture-mode-switch label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  border: 1px solid var(--divider);
+}
+
+.capture-mode-switch label:has(input:checked) {
+  color: var(--ink);
+  background: var(--hover-background);
+  border-color: var(--strong-border);
+}
+
+.capture-mode-switch input {
+  margin: 0;
+}
+
 .title-capture-form {
   margin-top: 18px;
 }
@@ -420,6 +470,10 @@ textarea:focus-visible {
   background: var(--input-background);
   border: 1px solid var(--strong-border);
   border-radius: 2px;
+}
+
+.capture-bar.doi-capture-bar {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .capture-bar:focus-within {
@@ -798,6 +852,56 @@ textarea:hover {
   color: var(--warning);
 }
 
+.doi-capture-review {
+  margin-top: 18px;
+}
+
+.doi-existing-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px;
+  margin-top: 18px;
+  background: var(--background);
+  border: 1px solid var(--divider);
+  border-left: 3px solid var(--warning);
+}
+
+.doi-existing-source h3 {
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.doi-existing-source p {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.doi-existing-source p span {
+  color: var(--muted-ink);
+}
+
+.doi-existing-source button {
+  min-height: 36px;
+  flex: none;
+  padding: 0 13px;
+  color: var(--button-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--button-background);
+  border: 1px solid var(--button-background);
+}
+
+.doi-existing-source button:hover:not(:disabled) {
+  background: var(--button-hover);
+  border-color: var(--button-hover);
+}
+
 .file-inspection {
   padding: 16px;
   margin-top: 14px;
@@ -958,6 +1062,230 @@ textarea:hover {
   border: 1px solid var(--panel-border);
 }
 
+.reader-library,
+.reader-workspace {
+  min-width: 0;
+}
+
+.reader-library .loading-message {
+  margin: 0;
+  border-top: 0;
+}
+
+.reader-empty {
+  padding: 64px 24px;
+  color: var(--empty-ink);
+  text-align: center;
+  border-bottom: 1px solid var(--divider);
+}
+
+.reader-empty h3 {
+  margin-bottom: 8px;
+  color: var(--empty-heading);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.reader-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.reader-list-error,
+.pdf-reader-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 90px;
+  padding: 20px;
+  margin: 0;
+  border: 1px solid currentcolor;
+}
+
+.reader-list-error button,
+.pdf-reader-state button {
+  min-height: 34px;
+  flex: none;
+  padding: 0 12px;
+  color: var(--button-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  background: var(--button-background);
+  border: 1px solid var(--button-background);
+}
+
+.reader-document-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.reader-document-list li {
+  border-bottom: 1px solid var(--divider);
+}
+
+.reader-document-list li > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 24px;
+  padding: 18px 14px 18px 12px;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+}
+
+.reader-document-list li > button:hover {
+  background: var(--hover-background);
+  border-left-color: var(--focus);
+}
+
+.reader-document-list li > button > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.reader-document-list strong,
+.reader-document-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-document-list small,
+.reader-document-list li > button > span:last-child,
+.reader-document-heading > span {
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.reader-document-list li > button > span:last-child {
+  flex: none;
+}
+
+.reader-document-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 20px;
+  background: var(--panel-background);
+  border: 1px solid var(--panel-border);
+  border-top: 3px solid var(--button-background);
+}
+
+.reader-document-heading h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.reader-document-heading .eyebrow {
+  margin-bottom: 6px;
+  text-transform: none;
+}
+
+.pdf-reader {
+  margin-top: 14px;
+  border: 1px solid var(--panel-border);
+}
+
+.pdf-reader-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  background: var(--panel-background);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.pdf-page-controls,
+.pdf-zoom-controls,
+.pdf-page-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdf-reader-toolbar button {
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  background: var(--panel-subtle);
+  border: 1px solid var(--strong-border);
+}
+
+.pdf-reader-toolbar button:hover:not(:disabled) {
+  background: var(--hover-background);
+  border-color: var(--focus);
+}
+
+.pdf-reader-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pdf-page-controls label,
+.pdf-zoom-controls output {
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.pdf-page-controls input {
+  width: 54px;
+  min-height: 32px;
+  padding: 4px 6px;
+  color: var(--ink);
+  text-align: center;
+  background: var(--input-background);
+  border: 1px solid var(--input-border);
+}
+
+.pdf-zoom-controls output {
+  min-width: 42px;
+  text-align: center;
+}
+
+.pdf-page-container {
+  position: relative;
+  min-height: 520px;
+  padding: 24px;
+  overflow: auto;
+  background: var(--panel-subtle);
+}
+
+.pdf-page-canvas {
+  display: block;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 22%);
+}
+
+.pdf-rendering-status {
+  position: sticky;
+  top: 0;
+  left: 50%;
+  z-index: 1;
+  display: table;
+  padding: 6px 9px;
+  margin: 0 auto -30px;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  background: var(--panel-background);
+  border: 1px solid var(--panel-border);
+}
+
 .document-preview {
   padding: 24px;
   background: var(--panel-background);
@@ -1054,6 +1382,10 @@ textarea:hover {
   align-items: end;
   padding: 18px 0;
   border-bottom: 1px solid var(--divider);
+}
+
+.discovery-search input {
+  width: 100%;
 }
 
 .discovery-tools > button,
@@ -1209,23 +1541,26 @@ textarea:hover {
 
 .source-list li > button {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   width: 100%;
   gap: 20px;
-  padding: 18px 12px;
+  padding: 17px 14px 17px 12px;
   color: var(--ink);
   text-align: left;
   background: transparent;
   border: 0;
+  border-left: 2px solid transparent;
 }
 
 .source-list li > button:hover {
   background: var(--hover-background);
+  border-left-color: var(--focus);
 }
 
 .source-summary {
   display: grid;
+  flex: 1;
   min-width: 0;
   gap: 5px;
 }
@@ -1256,6 +1591,39 @@ textarea:hover {
   border: 1px solid var(--tag-border);
   border-radius: 1px;
   text-transform: uppercase;
+}
+
+.source-row-aside {
+  display: flex;
+  align-items: flex-end;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-reading-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.source-reading-status::before {
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+.source-reading-status[data-status="reading"] {
+  color: var(--warning);
+}
+
+.source-reading-status[data-status="read"] {
+  color: var(--success);
 }
 
 .source-detail {
@@ -1473,6 +1841,7 @@ textarea:hover {
 }
 
 .doi-metadata-heading h3,
+.doi-review-intro h3,
 .doi-review-intro h4,
 .metadata-provenance h4 {
   margin: 0;
@@ -1546,6 +1915,7 @@ textarea:hover {
 }
 
 .doi-review-intro h4,
+.doi-review-intro h3,
 .metadata-provenance h4 {
   font-size: 13px;
 }
@@ -1599,11 +1969,21 @@ textarea:hover {
   border: 1px solid currentcolor;
 }
 
+.doi-required-label {
+  padding: 2px 5px;
+  color: var(--muted-ink);
+  border: 1px solid currentcolor;
+}
+
 .doi-field-comparison {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   padding-left: 22px;
+}
+
+.doi-field-comparison.single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .doi-field-comparison > span {
@@ -1902,6 +2282,7 @@ textarea:hover {
   .source-detail-heading,
   .doi-metadata-heading,
   .doi-review-intro,
+  .doi-existing-source,
   .attachment-summary,
   .source-danger-zone {
     align-items: flex-start;
@@ -1912,8 +2293,23 @@ textarea:hover {
     grid-template-columns: 1fr;
   }
 
+  .capture-mode-switch {
+    flex-wrap: wrap;
+  }
+
   .service-error {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .pdf-reader-toolbar,
+  .reader-document-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pdf-page-controls,
+  .pdf-zoom-controls {
+    flex-wrap: wrap;
   }
 }

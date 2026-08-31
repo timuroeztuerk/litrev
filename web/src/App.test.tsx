@@ -2,8 +2,16 @@ import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+vi.mock("./PdfReader", () => ({
+  PdfReader: ({ title, url }: { title: string; url: string }) => (
+    <div aria-label={`${title} test PDF`} data-url={url}>
+      PDF.js reader
+    </div>
+  ),
+}));
+
 import App from "./App";
-import type { Source, SourceDetail } from "./api";
+import type { DoiMetadataPreview, Source, SourceDetail } from "./api";
 
 const fetchMock = vi.fn();
 const confirmMock = vi.fn();
@@ -76,6 +84,38 @@ const failedAttachment = {
   can_remove: true,
 };
 
+const doiPreview = {
+  kind: "proposal",
+  normalized_doi: "10.1234/example",
+  provider: "Crossref",
+  provider_url: "https://api.crossref.org/works/10.1234%2Fexample",
+  retrieved_doi: "10.1234/example",
+  retrieved_at: "2026-08-31T12:00:00Z",
+  proposal_fingerprint: "reviewed-fingerprint",
+  proposal: {
+    source_type: "paper",
+    title: "Crossref title",
+    authors: ["Ada Lovelace"],
+    publication_year: 2024,
+    venue: "Crossref Journal",
+    url: "https://doi.org/10.1234/example",
+    abstract: "Crossref abstract.",
+    language: "en",
+    identifiers: [{ identifier_type: "issn", value: "2049-3630" }],
+  },
+  available_fields: [
+    "source_type",
+    "title",
+    "authors",
+    "publication_year",
+    "venue",
+    "url",
+    "abstract",
+    "language",
+    "identifiers",
+  ],
+} satisfies Extract<DoiMetadataPreview, { kind: "proposal" }>;
+
 function response(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -114,6 +154,19 @@ function sourceOrder(): string[] {
     const title = item.querySelector("strong")?.textContent;
     const description = item.querySelector(".source-summary > span")?.textContent;
     return `${title} — ${description}`;
+  });
+}
+
+async function openDoiCaptureReview(
+  preview: Extract<DoiMetadataPreview, { kind: "proposal" }> = doiPreview,
+) {
+  fireEvent.click(screen.getByRole("radio", { name: "DOI first" }));
+  fireEvent.change(screen.getByLabelText("DOI"), { target: { value: preview.normalized_doi } });
+  fetchMock.mockResolvedValueOnce(response(preview));
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+  return screen.findByRole("heading", {
+    level: 3,
+    name: `Review metadata from ${preview.provider}`,
   });
 }
 
@@ -170,6 +223,73 @@ test("uses the saved theme preference", async () => {
   expect(screen.getByRole("main").closest(".app-shell")).toHaveAttribute("data-theme", "light");
 });
 
+test("loads saved PDFs when Reader is opened and renders the selected document", async () => {
+  await renderLibrary([paperSource]);
+  fetchMock.mockResolvedValueOnce(
+    response([
+      {
+        attachment_id: convertedAttachment.id,
+        source_id: paperSource.id,
+        source_title: paperSource.title,
+        original_filename: convertedAttachment.original_filename,
+        byte_size: convertedAttachment.byte_size,
+      },
+    ]),
+  );
+
+  const readerNavigation = screen.getByRole("button", { name: "Reader" });
+  fireEvent.click(readerNavigation);
+
+  expect(await screen.findByRole("heading", { level: 1, name: "Reader" })).toHaveFocus();
+  expect(readerNavigation).toHaveAttribute("aria-current", "page");
+  expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(
+    "http://127.0.0.1:8765/api/reader/documents",
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: /Confirmed paper/ }));
+
+  const renderedPdf = screen.getByLabelText("Confirmed paper test PDF");
+  expect(renderedPdf).toHaveTextContent("PDF.js reader");
+  expect(renderedPdf).toHaveAttribute(
+    "data-url",
+    "http://127.0.0.1:8765/api/attachments/11/content",
+  );
+});
+
+test("shows an actionable Reader error and can retry the local PDF list", async () => {
+  await renderLibrary([]);
+  fetchMock.mockResolvedValueOnce(response({ detail: "unavailable" }, 500));
+  fireEvent.click(screen.getByRole("button", { name: "Reader" }));
+
+  expect(
+    await screen.findByText("The local PDF list could not be loaded. Check the service and try again."),
+  ).toBeInTheDocument();
+
+  fetchMock.mockResolvedValueOnce(response([]));
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+  expect(
+    await screen.findByRole("heading", { level: 3, name: "No PDFs in the Reader yet" }),
+  ).toBeInTheDocument();
+});
+
+test("opens a PDF in Reader directly from source details", async () => {
+  await renderLibrary([paperSource]);
+  fetchMock.mockResolvedValueOnce(
+    response({ ...paperSource, attachments: [convertedAttachment] }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Confirmed paper/ }));
+
+  fireEvent.click(await screen.findByRole("button", { name: "Open in Reader" }));
+
+  expect(screen.getByRole("heading", { level: 1, name: "Reader" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Confirmed paper test PDF")).toHaveAttribute(
+    "data-url",
+    "http://127.0.0.1:8765/api/attachments/11/content",
+  );
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
 test("keeps the library-empty state distinct from discovery results", async () => {
   await renderLibrary([]);
 
@@ -216,6 +336,25 @@ test("matches trimmed search text case-insensitively across every searchable fie
     expect(screen.getByRole("button", { name: /Quantum Methods/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Unrelated source/ })).not.toBeInTheDocument();
   }
+});
+
+test("shows useful metadata and reading state in each source row", async () => {
+  await renderLibrary([
+    makeSource({
+      id: 1,
+      title: "Field notes",
+      authors: ["Ada Researcher"],
+      publication_year: 2025,
+      venue: "Methods Press",
+      source_type: "other",
+      reading_status: "reading",
+    }),
+  ]);
+
+  const sourceRow = screen.getByRole("button", { name: /Field notes/ });
+  expect(within(sourceRow).getByText("Ada Researcher · 2025 · Methods Press")).toBeInTheDocument();
+  expect(within(sourceRow).getByText("Other")).toBeInTheDocument();
+  expect(within(sourceRow).getByText("Reading")).toBeInTheDocument();
 });
 
 test("combines source type and reading status filters and clears discovery controls", async () => {
@@ -577,6 +716,351 @@ test("requires a source title before making a request", async () => {
   expect(screen.getByRole("alert")).toHaveTextContent("Enter a title to add this source.");
   expect(screen.getByLabelText("Title")).toHaveFocus();
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+test("looks up a DOI only on request and cancels the review without saving", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+
+  fireEvent.click(screen.getByRole("radio", { name: "DOI first" }));
+  const doiInput = screen.getByLabelText("DOI");
+  expect(doiInput).toHaveFocus();
+  fireEvent.change(doiInput, { target: { value: "https://doi.org/10.1234/example" } });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  let finishLookup!: (value: ReturnType<typeof response>) => void;
+  fetchMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishLookup = resolve;
+      }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+  expect(screen.getByRole("button", { name: "Looking up…" })).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "Title first" })).toBeDisabled();
+
+  await act(async () => finishLookup(response(doiPreview)));
+  const reviewHeading = await screen.findByRole("heading", {
+    level: 3,
+    name: "Review metadata from Crossref",
+  });
+  expect(reviewHeading).toHaveFocus();
+  const review = reviewHeading.closest<HTMLElement>(".doi-capture-review");
+  if (!review) throw new Error("The DOI review was not rendered.");
+  const proposal = within(review);
+  expect(screen.getByText(/Normalized DOI 10\.1234\/example/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "View provider record" })).toHaveAttribute(
+    "href",
+    doiPreview.provider_url,
+  );
+  for (const value of [
+    "Paper",
+    "Crossref title",
+    "Ada Lovelace",
+    "2024",
+    "Crossref Journal",
+    "https://doi.org/10.1234/example",
+    "Crossref abstract.",
+    "en",
+    "ISSN 2049-3630",
+  ]) {
+    expect(proposal.getByText(value)).toBeInTheDocument();
+  }
+  const titleField = screen.getByRole("checkbox", { name: /Title/ });
+  const authorField = screen.getByRole("checkbox", { name: /Authors/ });
+  expect(titleField).toBeChecked();
+  expect(titleField).toBeDisabled();
+  expect(authorField).toBeChecked();
+  fireEvent.click(authorField);
+  expect(authorField).not.toBeChecked();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(screen.queryByRole("heading", { name: "Review metadata from Crossref" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Look up DOI" })).toHaveFocus());
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
+test("creates a source from selected DOI metadata and opens the persisted detail", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+  await openDoiCaptureReview();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: /Authors/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Abstract/ }));
+  const createdSource: SourceDetail = {
+    ...paperSource,
+    id: 41,
+    title: "Crossref title",
+    doi: "10.1234/example",
+    publication_year: 2024,
+    venue: "Crossref Journal",
+    url: "https://doi.org/10.1234/example",
+    language: "en",
+    identifiers: [{ identifier_type: "issn", value: "2049-3630" }],
+    attachments: [],
+    metadata_provenance: [
+      {
+        lookup_id: 51,
+        provider: "Crossref",
+        provider_url: doiPreview.provider_url,
+        requested_doi: "10.1234/example",
+        retrieved_doi: "10.1234/example",
+        retrieved_at: "2026-08-31T12:01:00Z",
+        applied_fields: [
+          "source_type",
+          "title",
+          "publication_year",
+          "venue",
+          "url",
+          "language",
+          "identifiers",
+        ],
+        applied_at: "2026-08-31T12:01:01Z",
+      },
+    ],
+  };
+  fetchMock.mockResolvedValueOnce(response(createdSource, 201));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+
+  expect(
+    await screen.findByRole("heading", { level: 2, name: "Crossref title" }),
+  ).toHaveFocus();
+  expect(screen.getByText("Added “Crossref title” from Crossref.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  const createCall = fetchMock.mock.calls.at(-1);
+  expect(createCall?.[0]).toBe("http://127.0.0.1:8765/api/sources/from-doi");
+  expect(JSON.parse((createCall?.[1] as RequestInit).body as string)).toEqual({
+    doi: "10.1234/example",
+    proposal_fingerprint: "reviewed-fingerprint",
+    fields: [
+      "source_type",
+      "title",
+      "publication_year",
+      "venue",
+      "url",
+      "language",
+      "identifiers",
+    ],
+  });
+});
+
+test("opens an existing source returned by DOI preview", async () => {
+  const existing = makeSource({
+    id: 19,
+    title: "Already saved",
+    source_type: "book",
+    doi: "10.1234/example",
+  });
+  await renderLibrary([existing]);
+  fireEvent.click(screen.getByRole("radio", { name: "DOI first" }));
+  fireEvent.change(screen.getByLabelText("DOI"), { target: { value: "10.1234/example" } });
+  fetchMock.mockResolvedValueOnce(
+    response({
+      kind: "existing_source",
+      normalized_doi: "10.1234/example",
+      existing_source: {
+        id: existing.id,
+        source_type: existing.source_type,
+        title: existing.title,
+        doi: existing.doi,
+      },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+
+  const duplicateHeading = await screen.findByRole("heading", {
+    level: 3,
+    name: "DOI already in library",
+  });
+  expect(duplicateHeading).toHaveFocus();
+  expect(screen.getByText("This DOI is already in your library. Open the saved source instead.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  fetchMock.mockResolvedValueOnce(response({ ...existing, attachments: [], metadata_provenance: [] }));
+  fireEvent.click(screen.getByRole("button", { name: "Open existing source" }));
+
+  expect(await screen.findByRole("heading", { level: 2, name: "Already saved" })).toHaveFocus();
+  expect(fetchMock).toHaveBeenLastCalledWith("http://127.0.0.1:8765/api/sources/19", undefined);
+});
+
+test("keeps invalid DOI and provider failures actionable", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+  fireEvent.click(screen.getByRole("radio", { name: "DOI first" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Enter a DOI to look up.");
+  expect(screen.getByLabelText("DOI")).toHaveFocus();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  fireEvent.change(screen.getByLabelText("DOI"), { target: { value: "not-a-doi" } });
+  fetchMock.mockResolvedValueOnce(
+    response(
+      {
+        detail: {
+          code: "invalid_doi",
+          message: "Enter a DOI with a 10. prefix and a non-empty suffix separated by a slash.",
+        },
+      },
+      422,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+  expect(
+    await screen.findByText(
+      "Enter a DOI with a 10. prefix and a non-empty suffix separated by a slash.",
+    ),
+  ).toHaveAttribute("role", "alert");
+  await waitFor(() => expect(screen.getByLabelText("DOI")).toHaveFocus());
+
+  fireEvent.change(screen.getByLabelText("DOI"), { target: { value: "10.1234/example" } });
+  fetchMock.mockResolvedValueOnce(
+    response(
+      {
+        detail: {
+          code: "doi_metadata_unavailable",
+          message: "Crossref is temporarily unavailable.",
+        },
+      },
+      503,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Look up DOI" }));
+  expect(await screen.findByText("Crossref is temporarily unavailable.")).toHaveAttribute(
+    "role",
+    "alert",
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Look up DOI" })).toHaveFocus(),
+  );
+  expect(screen.getByLabelText("DOI")).toHaveValue("10.1234/example");
+});
+
+test("returns changed Crossref data to review before retrying DOI creation", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+  await openDoiCaptureReview();
+  const changedPreview = {
+    ...doiPreview,
+    proposal_fingerprint: "changed-fingerprint",
+    proposal: { ...doiPreview.proposal, title: "Updated Crossref title" },
+  };
+  fetchMock.mockResolvedValueOnce(
+    response(
+      {
+        detail: {
+          code: "doi_metadata_changed",
+          message: "Crossref metadata changed since this review.",
+          preview: changedPreview,
+        },
+      },
+      409,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+
+  expect(await screen.findByText("Crossref metadata changed since this review.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(screen.getByText("Updated Crossref title")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Review metadata from Crossref" })).toHaveFocus();
+
+  const createdSource: SourceDetail = {
+    ...paperSource,
+    id: 63,
+    title: "Updated Crossref title",
+    authors: ["Ada Lovelace"],
+    publication_year: 2024,
+    venue: "Crossref Journal",
+    doi: "10.1234/example",
+    url: "https://doi.org/10.1234/example",
+    abstract: "Crossref abstract.",
+    language: "en",
+    identifiers: [{ identifier_type: "issn", value: "2049-3630" }],
+    attachments: [],
+    metadata_provenance: [],
+  };
+  fetchMock.mockResolvedValueOnce(response(createdSource, 201));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+  await screen.findByRole("heading", { level: 2, name: "Updated Crossref title" });
+
+  const retryCall = fetchMock.mock.calls.at(-1);
+  expect(JSON.parse((retryCall?.[1] as RequestInit).body as string)).toEqual(
+    expect.objectContaining({ proposal_fingerprint: "changed-fingerprint" }),
+  );
+});
+
+test("keeps a DOI creation failure reviewable and retryable", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+  await openDoiCaptureReview();
+  fetchMock.mockResolvedValueOnce(
+    response(
+      {
+        detail: {
+          code: "doi_source_creation_failed",
+          message: "The source could not be saved; no source or provenance was added.",
+        },
+      },
+      500,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+
+  expect(
+    await screen.findByText("The source could not be saved; no source or provenance was added."),
+  ).toHaveAttribute("role", "alert");
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add source" })).toHaveFocus());
+  expect(screen.getByRole("heading", { name: "Review metadata from Crossref" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /Title/ })).toBeChecked();
+});
+
+test("opens the existing source returned by a DOI creation race", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+  await openDoiCaptureReview();
+  const existing = makeSource({
+    id: 72,
+    title: "Saved during review",
+    doi: "10.1234/EXAMPLE",
+  });
+  fetchMock.mockResolvedValueOnce(
+    response(
+      {
+        detail: {
+          code: "doi_already_exists",
+          message: "A source with this DOI already exists.",
+          existing_source: {
+            id: existing.id,
+            source_type: existing.source_type,
+            title: existing.title,
+            doi: existing.doi,
+          },
+        },
+      },
+      409,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+
+  expect(
+    await screen.findByRole("heading", { level: 3, name: "DOI already in library" }),
+  ).toHaveFocus();
+  expect(screen.getByText("A source with this DOI already exists.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  fetchMock.mockResolvedValueOnce(response({ ...existing, attachments: [], metadata_provenance: [] }));
+  fireEvent.click(screen.getByRole("button", { name: "Open existing source" }));
+
+  expect(
+    await screen.findByRole("heading", { level: 2, name: "Saved during review" }),
+  ).toHaveFocus();
 });
 
 test("imports a bibliography, reports DOI skips, and adds sources to the library", async () => {
@@ -1034,7 +1518,9 @@ test("edits source metadata and updates the library summary", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Back to library/ }));
   const source = screen.getByRole("listitem");
   expect(within(source).getByText("Revised source")).toBeInTheDocument();
-  expect(within(source).getByText("Alice Author, Research Collective · 2026")).toBeInTheDocument();
+  expect(
+    within(source).getByText("Alice Author, Research Collective · 2026 · Evidence Press"),
+  ).toBeInTheDocument();
 });
 
 test("keeps malformed identifier edits local and focuses the identifier field", async () => {

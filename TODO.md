@@ -12,7 +12,7 @@ changed the relevant behavior.
 
 Each issue should be handled as its own bounded change with focused regression coverage.
 
-- [ ] Reject a stale DOI metadata review after the source DOI changes.
+- [x] Reject a stale DOI metadata review after the source DOI changes.
   - The apply endpoint checked selected metadata fields but did not verify that the source's
     current DOI still matched the lookup's requested and retrieved DOI.
   - The audit reproduced a source with DOI `10.1234/second` receiving metadata and provenance from

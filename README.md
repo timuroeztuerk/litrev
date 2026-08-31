@@ -20,6 +20,7 @@ be traced to its source and, where possible, an exact passage.
 The working vertical slice supports:
 
 - manual capture of books and papers;
+- creating a source from a DOI after reviewing selected Crossref metadata;
 - viewing and editing bibliographic metadata, standard identifiers, and reading status;
 - finding saved sources by metadata, source type, reading status, year, or date added;
 - organizing sources with reusable tags and collections;
@@ -32,13 +33,15 @@ The working vertical slice supports:
 - durable, deduplicated local document imports;
 - structured Markdown extraction with explicit failure states and retries;
 - reopening a source to inspect its attachments and extracted text;
+- opening stored PDFs in a dedicated, single-page Reader with page and zoom controls;
 - confirmed removal of failed attachments with safeguarded file cleanup; and
 - explicit source deletion with relationship and managed-file cleanup safeguards.
 
-Visual PDF reading, annotations, research maps, distributable packaging, and AI assistance are not
-implemented yet. The useful-library milestone is complete; the next bounded follow-up is
-[DOI-first source capture](docs/ROADMAP.md#21-doi-first-source-capture), followed by reader locators
-and annotations.
+Persistent PDF highlights and notes, research maps, distributable packaging, and AI assistance are
+not implemented yet. The useful-library milestone is complete, DOI-first capture remains in
+progress, and the read-only foundation of the [Reader milestone](docs/ROADMAP.md#3-reader-locators-and-annotations)
+is now available. [ISBN validation and metadata lookup](docs/ROADMAP.md#22-isbn-validation-and-metadata-lookup)
+also remains planned.
 
 ## Settings
 
@@ -69,6 +72,16 @@ annotation geometry; page-accurate reading will require a separate renderer.
 
 Scanned or image-only PDF pages are reported as needing OCR. Litrev does not silently enable
 Anydoc's hosted OCR option.
+
+### PDF Reader
+
+The dedicated Reader uses locally bundled [PDF.js](https://mozilla.github.io/pdf.js/) under the
+Apache 2.0 license. FastAPI resolves a PDF by its attachment identifier, verifies the managed file,
+and serves it with byte-range support; the React interface renders one page at a time. PDF.js is
+separate from Anydoc, and opening a PDF neither runs extraction nor changes the managed original.
+
+This first slice provides previous and next page navigation, direct page entry, zoom, and
+fit-to-width. It does not yet add a selectable text layer, persistent highlights, or reader notes.
 
 ## Run locally
 
@@ -172,6 +185,7 @@ recover files or records deleted before that backup was made.
 | `GET` | `/api/sources` | List sources |
 | `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
 | `POST` | `/api/sources` | Create a manual book or paper |
+| `POST` | `/api/sources/from-doi` | Create a source from reviewed Crossref metadata |
 | `PUT` | `/api/sources/{source_id}` | Replace a source's validated metadata and organization |
 | `DELETE` | `/api/sources/{source_id}` | Remove a source, its relationships, and managed files |
 | `POST` | `/api/doi-metadata-previews` | Preview Crossref metadata for a DOI without saving it |
@@ -182,6 +196,8 @@ recover files or records deleted before that backup was made.
 | `POST` | `/api/imports` | Save a source and original document |
 | `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown |
 | `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
+| `GET` | `/api/reader/documents` | List managed PDFs available to the local Reader |
+| `GET` | `/api/attachments/{attachment_id}/content` | Stream a verified managed PDF to the Reader |
 | `DELETE` | `/api/attachments/{attachment_id}` | Remove a failed attachment and its files |
 
 ## Verification
