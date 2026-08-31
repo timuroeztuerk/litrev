@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "uv run litrev-api",
+    "dev:docker": "concurrently --kill-others-on-fail \"uvicorn litrev.api:app --host 0.0.0.0 --port 8765 --reload --reload-dir /app/src\" \"vite --host 0.0.0.0\"",
     "dev:web": "vite",
     "build:web": "tsc --noEmit && vite build",
     "test:web": "vitest run",

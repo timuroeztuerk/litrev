@@ -27,6 +27,7 @@ end-to-end workflow.
 - [x] Source and source-linked note prototype models
 - [x] Anydoc document-to-Markdown conversion with stable application errors
 - [x] Local document selection and Markdown preview in React
+- [x] Docker browser workflow with source hot reload and persistent library data
 - [x] Python, frontend, and Rust checks
 - [x] Repository guidance and phased roadmap
 
@@ -49,17 +50,26 @@ Acceptance criteria:
 - Tests can create and destroy isolated libraries without using the user's data directory.
 - Partial imports do not leave records pointing to missing files.
 
-The first two criteria are covered now. The partial-import invariant becomes testable when durable
-attachment importing is introduced in 1.2 and must be satisfied before that workflow is complete.
+All three criteria are covered now. Attachment storage installs the managed file before committing
+its database record, and failure-path tests prove that storage errors cannot leave a visible record
+pointing to a missing file.
 
 ### 1.2 Document and attachment records
 
-- [ ] Add a document/attachment model with source, original filename, managed path, media type,
+- [x] Add a document/attachment model with source, original filename, managed path, media type,
   byte size, checksum, detected format, conversion status, and timestamps.
-- [ ] Persist Anydoc Markdown and conversion diagnostics.
-- [ ] Use content hashes to detect duplicate files.
-- [ ] Decide whether one source may own multiple document versions or supplements; encode the
+- [x] Persist Anydoc Markdown and conversion diagnostics.
+- [x] Use content hashes to detect duplicate files.
+- [x] Decide whether one source may own multiple document versions or supplements; encode the
   decision in the domain model and tests.
+- [ ] Add safeguarded removal for failed attachments and their managed artifacts.
+
+A source may own multiple distinct attachments so versions and supplements are not forced into
+separate source records. A SHA-256 checksum uniquely identifies attachment bytes across the local
+library; repeated bytes report the existing attachment instead of creating another record.
+Successful conversions store Markdown under the managed extracted-content directory. Expected
+Anydoc failures retain a stable status, message, and format-specific diagnostics on the attachment;
+rerunning conversion retries the unchanged managed original.
 
 Acceptance criteria:
 
@@ -70,10 +80,16 @@ Acceptance criteria:
 
 ### 1.3 Import workflow
 
-- [ ] Replace the temporary conversion preview endpoint with an ingestion service and API.
-- [ ] Let the user confirm or edit the source title before saving.
-- [ ] Show import progress and specific conversion failures in React.
-- [ ] Add a source detail screen with attachment and extracted-text status.
+- [x] Replace the temporary conversion preview endpoint with an ingestion service and API.
+- [x] Let the user confirm or edit the source title before saving.
+- [x] Show import progress and specific conversion failures in React.
+- [x] Add a source detail screen with attachment and extracted-text status.
+
+Saving the confirmed source and managed original is one database transaction with the file install.
+Extraction is a separate retryable API step, so the interface reports real save and extraction
+stages and an interrupted conversion leaves a recoverable pending attachment. Duplicate bytes open
+the existing source. Expected Anydoc failures remain visible on source detail, while an upload over
+50 MB is rejected before creating a source or retaining partial bytes.
 
 Acceptance criteria:
 
@@ -84,8 +100,9 @@ Acceptance criteria:
 
 Outcome: a growing research library can be found, corrected, and organized.
 
-- [ ] Expand source metadata: type, title, authors, year, venue, DOI, URL, abstract, language, and
-  reading status.
+- [x] Add manual quick capture for books and papers with a durable type and title.
+- [ ] Expand source metadata: authors, year, venue, DOI, URL, abstract, language, and reading
+  status.
 - [ ] Add library search, sorting, filtering, tags, and collections.
 - [ ] Add source editing and explicit deletion with attachment cleanup safeguards.
 - [ ] Import BibTeX, RIS, and CSL JSON.
@@ -202,6 +219,7 @@ Acceptance criteria:
 
 ## Recommended next task
 
-Implement the first narrow slice of milestone 1.2: add an attachment record and a transaction-safe
-managed-file operation, then prove that a failed import cannot leave a database record pointing to
-a missing file. Do not replace the conversion endpoint or expand the import UI in the same change.
+Finish milestone 1.2 with a safeguarded attachment-removal service. Coordinate database deletion
+with the managed original and extracted Markdown so a database failure cannot leave a surviving
+record pointing to a removed file; tolerate already-missing artifacts and test recovery from file
+and database failures. Keep that deletion work separate from metadata expansion.

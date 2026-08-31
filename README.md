@@ -22,17 +22,19 @@ Litrev is an early technical prototype, not yet a dependable reference manager. 
 vertical slice can:
 
 1. Start a React interface and local FastAPI service together.
-2. Create and list basic source records in SQLite.
-3. Select a supported local document.
-4. Convert it to structured Markdown with Anydoc's Rust engine.
-5. Preview the converted Markdown in React.
+2. Manually add and list books and papers in SQLite.
+3. Select a local document, inspect its file details, and confirm or edit its source title.
+4. Save the source and original in the managed local library before extracting structured Markdown
+   with Anydoc's Rust engine.
+5. Reopen the source later to review attachment status, retry a failed extraction, and view saved
+   Markdown.
 
-Document files and converted Markdown are not persisted yet. Visual PDF rendering, durable
-annotations, metadata import, search, citation graphs, distributable desktop packaging, and AI
-assistance are planned work.
+Original document files, converted Markdown, and useful conversion failures are persisted locally.
+Visual PDF rendering, durable annotations, metadata import, search, citation graphs, distributable
+desktop packaging, and AI assistance are planned work.
 
-The next priority is durable, migration-safe document ingestion. See the
-[implementation roadmap](docs/ROADMAP.md).
+The next priority is safeguarded cleanup for failed attachments, followed by richer library
+metadata. See the [implementation roadmap](docs/ROADMAP.md).
 
 ## Architecture
 
@@ -120,6 +122,34 @@ npm run tauri dev
 
 Tauri starts the frontend and Python development service through its `beforeDevCommand`.
 
+### Run the browser workflow in Docker
+
+Docker Compose runs the Vite browser interface and FastAPI service; it does not run the native
+Tauri window. Build and start the development container in the background:
+
+```bash
+docker volume create litrev-data
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:1420`. Compose bind-mounts the Python and React source directories. Vite
+updates the browser when frontend files change, and Uvicorn restarts the local API when Python or
+migration files change; ordinary code edits do not require an image rebuild. Changes to
+dependencies, lockfiles, the Dockerfile, or Compose configuration still require
+`docker compose up --build -d`.
+
+Follow the development logs or stop the container with:
+
+```bash
+docker compose logs -f litrev
+docker compose down
+```
+
+The external `litrev-data` volume preserves the SQLite library and managed files across container
+rebuilds and `docker compose down`; creating it again is harmless. Compose does not delete this
+volume. Run `docker volume rm litrev-data` only when the library is backed up and deletion is
+intentional.
+
 ## Local API
 
 The current development API is intentionally small:
@@ -128,8 +158,11 @@ The current development API is intentionally small:
 | --- | --- | --- |
 | `GET` | `/api/health` | Report local stack health and versions |
 | `GET` | `/api/sources` | List source records |
-| `POST` | `/api/sources` | Create a basic source record |
-| `POST` | `/api/documents/convert` | Convert a document of up to 50 MB with Anydoc |
+| `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
+| `POST` | `/api/sources` | Create a manual book or paper record |
+| `POST` | `/api/imports` | Save a confirmed source and original document |
+| `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown with Anydoc |
+| `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
 
 The service binds to `127.0.0.1:8765`. Application data uses the operating system's standard
 per-user data directory through `platformdirs`; on Linux the default library is normally
@@ -156,9 +189,11 @@ kept inside this repository, put it under `local-data/` (for example,
 also excludes PDF files, SQLite database files, and SQLite journal files anywhere in the worktree.
 
 The application database normally lives outside the repository in the operating system's per-user
-data directory, as described above. Selecting a document for the current conversion preview reads
-the original file and does not copy it into this repository. Ignore rules prevent new files from
-being added; they are not encryption and do not remove a file that Git was already tracking.
+data directory, as described above. Selecting a document alone does not copy it. Confirming an
+import copies the original into the managed `attachments/` directory and writes extracted Markdown
+under `extracted/`; neither location is inside this repository by default. Ignore rules prevent new
+files from being added to the worktree, but they are not encryption and do not remove a file that
+Git was already tracking.
 
 Schema migrations are forward-only because automatically reversing a revision could destroy
 research data. Developers create and review new revisions with `uv run alembic revision

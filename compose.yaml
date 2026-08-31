@@ -1,0 +1,39 @@
+services:
+  litrev:
+    build:
+      context: .
+    container_name: litrev
+    environment:
+      LITREV_DATA_DIR: /data
+      PYTHONDONTWRITEBYTECODE: "1"
+    ports:
+      - "1420:1420"
+      - "8765:8765"
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./src
+        target: /app/src
+      - type: bind
+        source: ./web
+        target: /app/web
+      - type: bind
+        source: ./index.html
+        target: /app/index.html
+        read_only: true
+      - type: bind
+        source: ./tsconfig.json
+        target: /app/tsconfig.json
+        read_only: true
+      - type: bind
+        source: ./vite.config.ts
+        target: /app/vite.config.ts
+        read_only: true
+      - type: volume
+        source: litrev-data
+        target: /data
+
+volumes:
+  litrev-data:
+    external: true
+    name: litrev-data
