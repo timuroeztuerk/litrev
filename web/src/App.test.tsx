@@ -104,6 +104,11 @@ function openLibraryData() {
   fireEvent.click(summary);
 }
 
+function openLibraryFilters() {
+  const button = screen.getByRole("button", { name: /^Filters/ });
+  if (button.getAttribute("aria-expanded") === "false") fireEvent.click(button);
+}
+
 function sourceOrder(): string[] {
   return screen.getAllByRole("listitem").map((item) => {
     const title = item.querySelector("strong")?.textContent;
@@ -170,9 +175,22 @@ test("keeps the library-empty state distinct from discovery results", async () =
 
   expect(screen.getByText("0 of 0 sources")).toBeInTheDocument();
   expect(
-    screen.getByRole("heading", { level: 3, name: "Start with one useful source" }),
+    screen.getByRole("heading", { level: 3, name: "Build your local library" }),
   ).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "No matching sources" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Workbench" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Research map" })).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("heading", { level: 1, name: "Your library" }).closest("header"),
+  ).toHaveClass("library-page-header");
+
+  fireEvent.click(screen.getByRole("button", { name: "Enter a title" }));
+  expect(screen.getByLabelText("Title")).toHaveFocus();
+
+  const documentInput = screen.getByLabelText("Choose a document") as HTMLInputElement;
+  const documentClick = vi.spyOn(documentInput, "click");
+  fireEvent.click(screen.getByRole("button", { name: "Choose a document" }));
+  expect(documentClick).toHaveBeenCalledOnce();
 });
 
 test("matches trimmed search text case-insensitively across every searchable field", async () => {
@@ -207,6 +225,7 @@ test("combines source type and reading status filters and clears discovery contr
     makeSource({ id: 3, title: "Reading book", reading_status: "reading", source_type: "book" }),
     makeSource({ id: 4, title: "Read report", reading_status: "read", source_type: "other" }),
   ]);
+  openLibraryFilters();
 
   fireEvent.change(screen.getByLabelText("Source type"), { target: { value: "book" } });
   fireEvent.change(screen.getByLabelText("Reading status"), { target: { value: "read" } });
@@ -214,9 +233,17 @@ test("combines source type and reading status filters and clears discovery contr
   expect(screen.getByText("1 of 4 sources")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Read book/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Reading book/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove source type filter" })).toHaveTextContent(
+    "Type: Book",
+  );
 
-  fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
-  expect(screen.getByLabelText("Search sources")).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Remove reading status filter" }));
+  expect(screen.getByLabelText("Reading status")).toHaveValue("all");
+  expect(screen.getByText("2 of 4 sources")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Reading status"), { target: { value: "read" } });
+
+  fireEvent.click(screen.getByRole("button", { name: "Clear all filters" }));
+  expect(screen.getByRole("button", { name: /^Filters/ })).toHaveFocus();
   expect(screen.getByLabelText("Source type")).toHaveValue("all");
   expect(screen.getByLabelText("Reading status")).toHaveValue("all");
   expect(screen.getByText("4 of 4 sources")).toBeInTheDocument();
@@ -229,7 +256,7 @@ test("combines source type and reading status filters and clears discovery contr
     screen.getByRole("heading", { level: 3, name: "No matching sources" }),
   ).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset discovery" }));
   expect(screen.getByLabelText("Search sources")).toHaveValue("");
   expect(screen.getByLabelText("Search sources")).toHaveFocus();
   expect(screen.getByLabelText("Sort by")).toHaveValue("title");
@@ -257,6 +284,7 @@ test("combines reusable tag and collection filters", async () => {
       collections: ["Thesis"],
     }),
   ]);
+  openLibraryFilters();
 
   expect(screen.getByLabelText("Tag")).toHaveValue("");
   expect(screen.getByRole("option", { name: "Evidence" })).toBeInTheDocument();
@@ -271,7 +299,7 @@ test("combines reusable tag and collection filters", async () => {
   expect(screen.queryByRole("button", { name: /Methods elsewhere/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Evidence in thesis/ })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
+  fireEvent.click(screen.getByRole("button", { name: "Clear all filters" }));
   expect(screen.getByLabelText("Tag")).toHaveValue("");
   expect(screen.getByLabelText("Collection")).toHaveValue("");
   expect(screen.getByText("3 of 3 sources")).toBeInTheDocument();
@@ -347,6 +375,7 @@ test("opens the correct filtered source and preserves controls on return", async
     publication_year: 2025,
   });
   await renderLibrary([makeSource({ id: 1, title: "Decoy" }), target]);
+  openLibraryFilters();
 
   fireEvent.change(screen.getByLabelText("Search sources"), { target: { value: "SYMPOSIUM" } });
   fireEvent.change(screen.getByLabelText("Sort by"), {
@@ -376,6 +405,7 @@ test("opens the correct filtered source and preserves controls on return", async
 
 test("newly added sources immediately respect active discovery controls", async () => {
   await renderLibrary([makeSource({ id: 1, title: "Existing paper" })]);
+  openLibraryFilters();
   fireEvent.change(screen.getByLabelText("Search sources"), { target: { value: "wanted" } });
   fireEvent.change(screen.getByLabelText("Source type"), { target: { value: "book" } });
 
@@ -392,6 +422,7 @@ test("newly added sources immediately respect active discovery controls", async 
 test("newly imported sources immediately respect active discovery controls", async () => {
   const existingBook = makeSource({ id: 1, title: "Existing book", source_type: "book" });
   await renderLibrary([existingBook]);
+  openLibraryFilters();
   fireEvent.change(screen.getByLabelText("Source type"), { target: { value: "book" } });
 
   const importedSource = makeSource({ id: 8, title: "Imported paper" });
@@ -428,6 +459,7 @@ test("edited sources immediately respect active discovery controls", async () =>
     tags: ["Methods"],
   });
   await renderLibrary([readSource]);
+  openLibraryFilters();
   fireEvent.change(screen.getByLabelText("Reading status"), { target: { value: "read" } });
   fireEvent.change(screen.getByLabelText("Tag"), { target: { value: "Methods" } });
   fetchMock.mockResolvedValueOnce(response({ ...readSource, attachments: [] }));
@@ -1464,7 +1496,7 @@ test("removes a source from the UI when only temporary cleanup remains", async (
     await screen.findByText("The source was removed, but temporary file cleanup did not finish."),
   ).toHaveAttribute("role", "status");
   expect(screen.getByRole("heading", { level: 2, name: "Sources" })).toHaveFocus();
-  expect(screen.getByRole("heading", { name: "Start with one useful source" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Build your local library" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Delete source" })).not.toBeInTheDocument();
 });
 

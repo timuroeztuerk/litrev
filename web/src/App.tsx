@@ -971,12 +971,6 @@ export default function App() {
             <span>Library</span>
             <span className="count">{sources.length}</span>
           </button>
-          <button className="nav-item" type="button" disabled>
-            Workbench
-          </button>
-          <button className="nav-item" type="button" disabled>
-            Research map
-          </button>
         </nav>
         <div className="sidebar-footer">
           <button
@@ -996,28 +990,28 @@ export default function App() {
       </aside>
 
       <div className="workspace">
-        <header className="page-header">
+        <header
+          className={`page-header ${!isSettingsOpen && !selectedSource ? "library-page-header" : ""}`}
+        >
           <div>
-            <p className="eyebrow">
-              {isSettingsOpen
-                ? "Application preferences"
-                : selectedSource
-                  ? "Source detail"
-                  : "Research workspace"}
-            </p>
+            {(isSettingsOpen || selectedSource) && (
+              <p className="eyebrow">
+                {isSettingsOpen ? "Application preferences" : "Source detail"}
+              </p>
+            )}
             <h1
               ref={isSettingsOpen ? settingsHeading : undefined}
               tabIndex={isSettingsOpen ? -1 : undefined}
             >
               {isSettingsOpen ? "Settings" : (selectedSource?.title ?? "Your library")}
             </h1>
-            <p>
-              {isSettingsOpen
-                ? "Manage how Litrev works for you."
-                : selectedSource
-                  ? "Review its metadata, saved documents, and extracted text."
-                  : "Collect papers and keep every idea connected to its source."}
-            </p>
+            {(isSettingsOpen || selectedSource) && (
+              <p>
+                {isSettingsOpen
+                  ? "Manage how Litrev works for you."
+                  : "Review its metadata, saved documents, and extracted text."}
+              </p>
+            )}
           </div>
         </header>
 
@@ -1399,105 +1393,195 @@ export default function App() {
                   </span>
                 </div>
                 {sources.length > 0 && (
-                  <div className="discovery-controls" role="search">
-                    <div className="form-field discovery-search">
-                      <label htmlFor="library-search">Search sources</label>
-                      <input
-                        autoComplete="off"
-                        id="library-search"
-                        onChange={(event) => setSearchText(event.target.value)}
-                        placeholder="Title, author, venue, or DOI"
-                        ref={librarySearchInput}
-                        type="search"
-                        value={searchText}
-                      />
-                    </div>
-                    <div className="form-field">
-                      <label htmlFor="library-sort">Sort by</label>
-                      <select
-                        id="library-sort"
-                        onChange={(event) => setDiscoverySort(event.target.value as DiscoverySort)}
-                        value={discoverySort}
+                  <div aria-label="Library discovery" role="search">
+                    <div className="discovery-tools">
+                      <div className="form-field discovery-search">
+                        <label htmlFor="library-search">Search sources</label>
+                        <input
+                          autoComplete="off"
+                          id="library-search"
+                          onChange={(event) => setSearchText(event.target.value)}
+                          placeholder="Title, author, venue, or DOI"
+                          ref={librarySearchInput}
+                          type="search"
+                          value={searchText}
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor="library-sort">Sort by</label>
+                        <select
+                          id="library-sort"
+                          onChange={(event) => setDiscoverySort(event.target.value as DiscoverySort)}
+                          value={discoverySort}
+                        >
+                          <option value="title">Title A–Z</option>
+                          <option value="publication-year">Newest publication year</option>
+                          <option value="recently-added">Recently added</option>
+                        </select>
+                      </div>
+                      <button
+                        aria-controls="library-filter-panel"
+                        aria-expanded={filtersOpen}
+                        className="filter-toggle"
+                        onClick={() => setFiltersOpen((current) => !current)}
+                        ref={filterToggleButton}
+                        type="button"
                       >
-                        <option value="title">Title A–Z</option>
-                        <option value="publication-year">Newest publication year</option>
-                        <option value="recently-added">Recently added</option>
-                      </select>
-                    </div>
-                    <div className="form-field">
-                      <label htmlFor="library-source-type">Source type</label>
-                      <select
-                        id="library-source-type"
-                        onChange={(event) =>
-                          setSourceTypeFilter(event.target.value as SourceType | "all")
-                        }
-                        value={sourceTypeFilter}
-                      >
-                        <option value="all">All types</option>
-                        <option value="paper">Paper</option>
-                        <option value="book">Book</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </div>
-                    <div className="form-field">
-                      <label htmlFor="library-reading-status">Reading status</label>
-                      <select
-                        id="library-reading-status"
-                        onChange={(event) =>
-                          setReadingStatusFilter(event.target.value as ReadingStatus | "all")
-                        }
-                        value={readingStatusFilter}
-                      >
-                        <option value="all">All statuses</option>
-                        <option value="unread">Unread</option>
-                        <option value="reading">Reading</option>
-                        <option value="read">Read</option>
-                      </select>
-                    </div>
-                    <div className="form-field">
-                      <label htmlFor="library-tag">Tag</label>
-                      <select
-                        disabled={availableTags.length === 0}
-                        id="library-tag"
-                        onChange={(event) => setTagFilter(event.target.value)}
-                        value={tagFilter}
-                      >
-                        <option value="">All tags</option>
-                        {availableTags.map((tag) => (
-                          <option key={tag} value={tag}>
-                            {tag}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="form-field">
-                      <label htmlFor="library-collection">Collection</label>
-                      <select
-                        disabled={availableCollections.length === 0}
-                        id="library-collection"
-                        onChange={(event) => setCollectionFilter(event.target.value)}
-                        value={collectionFilter}
-                      >
-                        <option value="">All collections</option>
-                        {availableCollections.map((collection) => (
-                          <option key={collection} value={collection}>
-                            {collection}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {discoveryControlsActive && (
-                      <button onClick={clearDiscoveryControls} type="button">
-                        Clear all
+                        Filters
+                        {activeFilterCount > 0 && <span>{activeFilterCount}</span>}
                       </button>
+                    </div>
+                    {filtersOpen && (
+                      <div className="filter-panel" id="library-filter-panel">
+                        <div className="form-field">
+                          <label htmlFor="library-source-type">Source type</label>
+                          <select
+                            id="library-source-type"
+                            onChange={(event) =>
+                              setSourceTypeFilter(event.target.value as SourceType | "all")
+                            }
+                            value={sourceTypeFilter}
+                          >
+                            <option value="all">All types</option>
+                            <option value="paper">Paper</option>
+                            <option value="book">Book</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </div>
+                        <div className="form-field">
+                          <label htmlFor="library-reading-status">Reading status</label>
+                          <select
+                            id="library-reading-status"
+                            onChange={(event) =>
+                              setReadingStatusFilter(event.target.value as ReadingStatus | "all")
+                            }
+                            value={readingStatusFilter}
+                          >
+                            <option value="all">All statuses</option>
+                            <option value="unread">Unread</option>
+                            <option value="reading">Reading</option>
+                            <option value="read">Read</option>
+                          </select>
+                        </div>
+                        <div className="form-field">
+                          <label htmlFor="library-tag">Tag</label>
+                          <select
+                            disabled={availableTags.length === 0}
+                            id="library-tag"
+                            onChange={(event) => setTagFilter(event.target.value)}
+                            value={tagFilter}
+                          >
+                            <option value="">All tags</option>
+                            {availableTags.map((tag) => (
+                              <option key={tag} value={tag}>
+                                {tag}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-field">
+                          <label htmlFor="library-collection">Collection</label>
+                          <select
+                            disabled={availableCollections.length === 0}
+                            id="library-collection"
+                            onChange={(event) => setCollectionFilter(event.target.value)}
+                            value={collectionFilter}
+                          >
+                            <option value="">All collections</option>
+                            {availableCollections.map((collection) => (
+                              <option key={collection} value={collection}>
+                                {collection}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                    {activeFilterCount > 0 && (
+                      <div aria-label="Active filters" className="active-filters">
+                        <span className="active-filter-label">Active</span>
+                        {sourceTypeFilter !== "all" && (
+                          <button
+                            aria-label="Remove source type filter"
+                            onClick={() => {
+                              setSourceTypeFilter("all");
+                              filterToggleButton.current?.focus();
+                            }}
+                            type="button"
+                          >
+                            Type: {sourceTypeLabels[sourceTypeFilter]}{" "}
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        )}
+                        {readingStatusFilter !== "all" && (
+                          <button
+                            aria-label="Remove reading status filter"
+                            onClick={() => {
+                              setReadingStatusFilter("all");
+                              filterToggleButton.current?.focus();
+                            }}
+                            type="button"
+                          >
+                            Status: {readingStatusLabels[readingStatusFilter]}{" "}
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        )}
+                        {tagFilter && (
+                          <button
+                            aria-label="Remove tag filter"
+                            onClick={() => {
+                              setTagFilter("");
+                              filterToggleButton.current?.focus();
+                            }}
+                            type="button"
+                          >
+                            Tag: {tagFilter} <span aria-hidden="true">×</span>
+                          </button>
+                        )}
+                        {collectionFilter && (
+                          <button
+                            aria-label="Remove collection filter"
+                            onClick={() => {
+                              setCollectionFilter("");
+                              filterToggleButton.current?.focus();
+                            }}
+                            type="button"
+                          >
+                            Collection: {collectionFilter} <span aria-hidden="true">×</span>
+                          </button>
+                        )}
+                        <button
+                          className="clear-active-filters"
+                          onClick={clearSourceFilters}
+                          type="button"
+                        >
+                          Clear all filters
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
                 {sources.length === 0 ? (
                   <div className="empty-state">
                     <span className="empty-glyph">↗</span>
-                    <h3>Start with one useful source</h3>
-                    <p>Add its title or import a local document.</p>
+                    <h3>Build your local library</h3>
+                    <p>Enter a title above, or begin with a document already on this device.</p>
+                    <div className="empty-actions">
+                      <button
+                        disabled={!serviceReady}
+                        onClick={() => titleInput.current?.focus()}
+                        type="button"
+                      >
+                        Enter a title
+                      </button>
+                      <button
+                        disabled={isImporting}
+                        onClick={() => documentInput.current?.click()}
+                        type="button"
+                      >
+                        Choose a document
+                      </button>
+                    </div>
                   </div>
                 ) : visibleSources.length === 0 ? (
                   <div className="empty-state">
@@ -1505,7 +1589,7 @@ export default function App() {
                     <h3>No matching sources</h3>
                     <p>Adjust the search or filters to see more of your library.</p>
                     <button onClick={clearDiscoveryControls} type="button">
-                      Clear filters
+                      Reset discovery
                     </button>
                   </div>
                 ) : (

@@ -205,6 +205,8 @@ the user specifically requests it.
 
 - [Roadmap](docs/ROADMAP.md) defines the milestone order and acceptance criteria.
 - [Agent instructions](AGENTS.md) define architecture, safety rules, and the definition of done.
+- [Opt-in audit backlog](TODO.md) is consulted only when the user explicitly asks to review or work
+  from `TODO.md`. Agents must otherwise ignore it when choosing or scoping work.
 
 Start future work with the first unchecked item in the current roadmap milestone unless the user
 explicitly changes the priority.

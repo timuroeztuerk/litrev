@@ -7,7 +7,6 @@ import pytest
 from litrev.domain.sources import SourceType
 from litrev.services import doi_metadata
 from litrev.services.doi_metadata import (
-    CROSSREF_RESPONSE_MEDIA_TYPE,
     DoiMetadataMalformedError,
     DoiMetadataMismatchError,
     DoiMetadataNotFoundError,
@@ -50,7 +49,7 @@ def test_crossref_lookup_requests_one_encoded_doi_and_maps_canonical_metadata() 
     metadata = lookup_crossref_metadata("https://doi.org/10.1234/Example", fetch=fetch)
 
     assert requests[0].full_url == "https://api.crossref.org/works/10.1234%2FExample"
-    assert requests[0].get_header("Accept") == CROSSREF_RESPONSE_MEDIA_TYPE
+    assert requests[0].get_header("Accept") == "application/json"
     assert requests[0].get_header("User-agent", "").startswith("Litrev/")
     assert metadata.doi == "10.1234/Example"
     assert metadata.source_type is SourceType.PAPER

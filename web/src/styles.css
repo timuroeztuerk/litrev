@@ -264,6 +264,16 @@ main {
   border-bottom: 1px solid var(--panel-border);
 }
 
+.library-page-header {
+  align-items: center;
+  padding-block: 18px;
+}
+
+.library-page-header h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--subtle-ink);
@@ -1037,17 +1047,18 @@ textarea:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.discovery-controls {
+.discovery-tools {
   display: grid;
-  grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(145px, 1fr));
+  grid-template-columns: minmax(280px, 1fr) 220px auto;
   gap: 10px;
   align-items: end;
   padding: 18px 0;
   border-bottom: 1px solid var(--divider);
 }
 
-.discovery-controls button,
-.empty-state button {
+.discovery-tools > button,
+.empty-state > button,
+.empty-actions button {
   min-height: 42px;
   padding: 0 14px;
   color: var(--ink);
@@ -1058,10 +1069,91 @@ textarea:hover {
   border-radius: 2px;
 }
 
-.discovery-controls button:hover,
-.empty-state button:hover {
+.discovery-tools > button:hover,
+.empty-state > button:hover,
+.empty-actions button:hover {
   background: var(--hover-background);
   border-color: var(--focus);
+}
+
+.discovery-tools > button:disabled,
+.empty-state > button:disabled,
+.empty-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.filter-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.filter-toggle span {
+  display: inline-grid;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  color: var(--button-ink);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  background: var(--button-background);
+  border-radius: 10px;
+}
+
+.filter-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px;
+  background: var(--panel-subtle);
+  border-bottom: 1px solid var(--divider);
+}
+
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.active-filter-label {
+  margin-right: 2px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.active-filters button {
+  min-height: 30px;
+  padding: 4px 9px;
+  color: var(--tag-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  background: var(--tag-background);
+  border: 1px solid var(--tag-border);
+  border-radius: 2px;
+}
+
+.active-filters button:hover {
+  border-color: var(--focus);
+}
+
+.active-filters .clear-active-filters {
+  color: var(--muted-ink);
+  background: transparent;
+  border-color: transparent;
+}
+
+.active-filters .clear-active-filters:hover {
+  color: var(--ink);
+  border-color: var(--strong-border);
 }
 
 .empty-state {
@@ -1094,7 +1186,14 @@ textarea:hover {
   margin-bottom: 0;
 }
 
-.empty-state button {
+.empty-state > button {
+  margin-top: 18px;
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
   margin-top: 18px;
 }
 
@@ -1749,12 +1848,8 @@ textarea:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .discovery-controls {
+  .filter-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .discovery-search {
-    grid-column: 1 / -1;
   }
 
   .import-confirmation button {
@@ -1784,12 +1879,12 @@ textarea:hover {
     grid-template-columns: 1fr;
   }
 
-  .discovery-controls {
-    grid-template-columns: 1fr;
+  .discovery-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .discovery-search {
-    grid-column: auto;
+    grid-column: 1 / -1;
   }
 
   .file-inspection dl,

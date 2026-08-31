@@ -13,7 +13,7 @@ from litrev.services.bibliographies import doi_key, normalize_imported_doi
 
 CROSSREF_PROVIDER = "Crossref"
 CROSSREF_API_ROOT = "https://api.crossref.org/works"
-CROSSREF_RESPONSE_MEDIA_TYPE = "application/vnd.crossref-api-message+json"
+_CROSSREF_ACCEPT_MEDIA_TYPE = "application/json"
 MAX_CROSSREF_RESPONSE_BYTES = 2 * 1024 * 1024
 CROSSREF_TIMEOUT_SECONDS = 10
 _CROSSREF_USER_AGENT = "Litrev/0.1 (local literature-review application)"
@@ -101,7 +101,7 @@ def lookup_crossref_metadata(
     request = Request(
         provider_url,
         headers={
-            "Accept": CROSSREF_RESPONSE_MEDIA_TYPE,
+            "Accept": _CROSSREF_ACCEPT_MEDIA_TYPE,
             "User-Agent": _CROSSREF_USER_AGENT,
         },
     )
