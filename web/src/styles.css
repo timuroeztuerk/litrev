@@ -17,7 +17,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -322,7 +323,8 @@ h2 {
 .theme-toggle:focus-visible,
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -428,7 +430,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   min-width: 0;
   min-height: 42px;
   padding: 10px 12px;
@@ -446,13 +449,20 @@ select {
   width: 100%;
 }
 
-input::placeholder {
+textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
   color: var(--muted-ink);
   opacity: 0.78;
 }
 
 input:hover,
-select:hover {
+select:hover,
+textarea:hover {
   border-color: var(--focus);
 }
 
@@ -471,6 +481,8 @@ select:hover {
 .input-row button,
 .import-confirmation button,
 .attachment-actions button,
+.metadata-heading button,
+.metadata-form-actions button,
 .back-button {
   min-height: 42px;
   padding: 0 18px;
@@ -487,6 +499,8 @@ select:hover {
 .input-row button:hover:not(:disabled),
 .import-confirmation button:hover:not(:disabled),
 .attachment-actions button:hover:not(:disabled),
+.metadata-heading button:hover:not(:disabled),
+.metadata-form-actions button:hover:not(:disabled),
 .back-button:hover:not(:disabled) {
   background: var(--button-hover);
   border-color: var(--button-hover);
@@ -508,7 +522,10 @@ select:hover {
 .capture-fields button:disabled,
 .input-row button:disabled,
 .import-confirmation button:disabled,
-.attachment-actions button:disabled {
+.attachment-actions button:disabled,
+.metadata-heading button:disabled,
+.metadata-form-actions button:disabled,
+.back-button:disabled {
   cursor: default;
   opacity: 0.5;
 }
@@ -780,6 +797,33 @@ select:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.discovery-controls {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(145px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.discovery-controls button,
+.empty-state button {
+  min-height: 42px;
+  padding: 0 14px;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--strong-border);
+  border-radius: 2px;
+}
+
+.discovery-controls button:hover,
+.empty-state button:hover {
+  background: var(--hover-background);
+  border-color: var(--focus);
+}
+
 .empty-state {
   padding: 64px 20px;
   color: var(--empty-ink);
@@ -804,6 +848,14 @@ select:hover {
   color: var(--empty-heading);
   font-size: 16px;
   font-weight: 600;
+}
+
+.empty-state p {
+  margin-bottom: 0;
+}
+
+.empty-state button {
+  margin-top: 18px;
 }
 
 .source-list {
@@ -851,6 +903,10 @@ select:hover {
   color: var(--muted-ink);
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 11px;
+}
+
+.source-summary > .source-organization-summary {
+  color: var(--subtle-ink);
 }
 
 .source-kind {
@@ -925,6 +981,108 @@ select:hover {
 
 .detail-notice.error {
   color: var(--error);
+}
+
+.metadata-section {
+  margin-top: 16px;
+  background: var(--panel-background);
+  border: 1px solid var(--panel-border);
+}
+
+.metadata-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.metadata-heading h3 {
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.metadata-heading button,
+.metadata-form-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--divider);
+}
+
+.metadata-grid > div {
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--panel-background);
+}
+
+.metadata-grid dt {
+  margin-bottom: 6px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.metadata-grid dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.metadata-grid a {
+  color: var(--subtle-ink);
+}
+
+.metadata-grid .metadata-authors,
+.metadata-grid .metadata-abstract,
+.metadata-grid .metadata-tags,
+.metadata-grid .metadata-collections {
+  grid-column: 1 / -1;
+}
+
+.metadata-form {
+  padding: 18px;
+}
+
+.metadata-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.metadata-authors-field,
+.metadata-abstract-field {
+  grid-column: 1 / -1;
+}
+
+.metadata-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.metadata-form-actions button:last-child {
+  color: var(--ink);
+  background: transparent;
+  border-color: var(--strong-border);
+}
+
+.metadata-form-actions button:last-child:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover-background);
+  border-color: var(--focus);
 }
 
 .attachment-heading {
@@ -1027,6 +1185,18 @@ select:hover {
   font-size: 11px;
 }
 
+.attachment-actions .danger-button {
+  color: var(--error);
+  background: transparent;
+  border-color: var(--error);
+}
+
+.attachment-actions .danger-button:hover:not(:disabled) {
+  color: var(--button-ink);
+  background: var(--error);
+  border-color: var(--error);
+}
+
 @media (max-width: 980px) {
   main {
     width: auto;
@@ -1045,6 +1215,18 @@ select:hover {
 
   .import-confirmation {
     grid-template-columns: 120px minmax(0, 1fr);
+  }
+
+  .metadata-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .discovery-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .discovery-search {
+    grid-column: 1 / -1;
   }
 
   .import-confirmation button {
@@ -1072,6 +1254,14 @@ select:hover {
 
   .capture-fields {
     grid-template-columns: 1fr;
+  }
+
+  .discovery-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .discovery-search {
+    grid-column: auto;
   }
 
   .file-inspection dl,

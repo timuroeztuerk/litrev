@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from litrev.domain.documents import ConversionStatus
+from litrev.domain.documents import REMOVABLE_CONVERSION_STATUSES, ConversionStatus
 from litrev.domain.sources import SourceType
 from litrev.infrastructure.database import Database
 from litrev.infrastructure.models import AttachmentRecord, SourceRecord
@@ -17,6 +17,7 @@ from litrev.infrastructure.storage import (
     ManagedAttachmentStore,
     ManagedExtractionStore,
     ManagedFileConflictError,
+    stage_managed_attachment_removal,
 )
 
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
@@ -61,6 +62,14 @@ class AttachmentNotFoundError(Exception):
 
 
 class AttachmentNotConvertedError(Exception):
+    pass
+
+
+class AttachmentRemovalNotAllowedError(Exception):
+    pass
+
+
+class AttachmentRemovalDatabaseError(Exception):
     pass
 
 
@@ -195,6 +204,51 @@ def _store_attachment_record(
 
 def _find_duplicate_attachment(session: Session, checksum: str) -> AttachmentRecord | None:
     return session.scalar(select(AttachmentRecord).where(AttachmentRecord.checksum == checksum))
+
+
+def can_remove_attachment(record: AttachmentRecord) -> bool:
+    try:
+        status = ConversionStatus(record.conversion_status)
+    except ValueError:
+        return False
+    return status in REMOVABLE_CONVERSION_STATUSES
+
+
+def remove_failed_attachment(database: Database, attachment_id: int) -> None:
+    paths = database.library_paths
+    if paths is None:
+        raise ValueError("Managed attachment removal requires a library-backed database")
+
+    with database.session() as session:
+        record = session.get(AttachmentRecord, attachment_id)
+        if record is None:
+            raise AttachmentNotFoundError(f"Attachment {attachment_id} does not exist.")
+        if not can_remove_attachment(record):
+            raise AttachmentRemovalNotAllowedError(
+                "Only an attachment with a failed extraction can be removed."
+            )
+
+        staged = stage_managed_attachment_removal(
+            paths,
+            checksum=record.checksum,
+            managed_path=record.managed_path,
+            extracted_path=record.extracted_path,
+        )
+        try:
+            session.delete(record)
+            session.commit()
+        except Exception as error:
+            rollback_error: Exception | None = None
+            try:
+                session.rollback()
+            except Exception as caught:
+                rollback_error = caught
+            staged.restore()
+            raise AttachmentRemovalDatabaseError(
+                "The attachment record could not be removed; its managed artifacts were restored."
+            ) from (rollback_error or error)
+
+        staged.discard()
 
 
 def convert_attachment(database: Database, attachment_id: int) -> AttachmentRecord:

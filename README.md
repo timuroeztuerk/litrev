@@ -1,104 +1,71 @@
 # Litrev
 
-Litrev is a local-first desktop workspace for organizing the papers, notes, evidence, summaries,
-and relationships involved in a literature review.
+Litrev is a local-first desktop workspace for organizing the sources, notes, evidence, and
+relationships involved in a literature review. It currently targets one researcher and is still
+an early prototype, not a dependable reference manager.
 
-The project currently targets one person's research workflow. The long-term goal is a dependable
-research memory system in which every summary, claim, and connection remains traceable to its
-source and, where possible, an exact passage.
+The long-term goal is a research memory system in which every summary, claim, and connection can
+be traced to its source and, where possible, an exact passage.
 
-## Product principles
+## Principles
 
 - **Local by default:** documents and research data stay on the user's computer.
-- **Traceable:** derived notes and claims should link back to inspectable evidence.
-- **Interoperable:** standard identifiers and bibliography formats should remain importable and
-  exportable.
-- **Recoverable:** a personal research library must be safe to migrate, back up, and inspect.
-- **AI optional:** future AI features should enhance a complete non-AI workflow, not replace it.
+- **Traceable:** derived work should link back to inspectable evidence.
+- **Interoperable:** use standard identifiers and bibliography formats.
+- **Recoverable:** libraries must be safe to migrate, back up, and inspect.
+- **AI optional:** core library workflows must remain useful without AI.
 
-## Current status
+## Current state
 
-Litrev is an early technical prototype, not yet a dependable reference manager. Its current
-vertical slice can:
+The working vertical slice supports:
 
-1. Start a React interface and local FastAPI service together.
-2. Manually add and list books and papers in SQLite.
-3. Select a local document, inspect its file details, and confirm or edit its source title.
-4. Save the source and original in the managed local library before extracting structured Markdown
-   with Anydoc's Rust engine.
-5. Reopen the source later to review attachment status, retry a failed extraction, and view saved
-   Markdown.
+- manual capture of books and papers;
+- viewing and editing bibliographic metadata and reading status;
+- finding saved sources by metadata, source type, reading status, year, or date added;
+- organizing sources with reusable tags and collections;
+- durable, deduplicated local document imports;
+- structured Markdown extraction with explicit failure states and retries;
+- reopening a source to inspect its attachments and extracted text; and
+- confirmed removal of failed attachments with safeguarded file cleanup.
 
-Original document files, converted Markdown, and useful conversion failures are persisted locally.
-Visual PDF rendering, durable annotations, metadata import, search, citation graphs, distributable
-desktop packaging, and AI assistance are planned work.
-
-The next priority is safeguarded cleanup for failed attachments, followed by richer library
-metadata. See the [implementation roadmap](docs/ROADMAP.md).
+Visual PDF reading, annotations, bibliography exchange, source deletion, research maps,
+distributable packaging, and AI assistance are not implemented yet. Work is continuing on
+[useful library metadata](docs/ROADMAP.md#2-useful-library-and-metadata).
 
 ## Architecture
 
 ```text
-Tauri 2 desktop shell
-└── React + TypeScript + Vite interface
-    └── FastAPI service on 127.0.0.1:8765
-        ├── SQLite + SQLAlchemy library
-        ├── Anydoc Rust document conversion
-        └── NetworkX relationship prototype
+Tauri desktop shell (`src-tauri/`)
+└── React + TypeScript UI (`web/`)
+    └── FastAPI local boundary (`src/litrev/api.py`)
+        ├── domain rules (`src/litrev/domain/`)
+        ├── application services (`src/litrev/services/`)
+        └── SQLite/SQLAlchemy adapters (`src/litrev/infrastructure/`)
 ```
 
-The boundaries are intentional:
+React owns the interface, FastAPI owns the local HTTP contract, and the Python domain and service
+layers own research behavior. Tauri currently starts the development processes but does not yet
+package the Python service as a production sidecar.
 
-- `web/` owns presentation and interaction.
-- `src/litrev/api.py` owns the local HTTP contract.
-- `src/litrev/domain/` owns research concepts that should not depend on a framework.
-- `src/litrev/services/` coordinates application behavior such as document conversion.
-- `src/litrev/infrastructure/` owns SQLite, SQLAlchemy, files, and external adapters.
-- `src-tauri/` owns desktop lifecycle and packaging.
+### Document conversion
 
-The Python service currently runs as a separate development process. Packaging it as a managed
-Tauri sidecar is required before Litrev can ship as a self-contained desktop application.
+[Anydoc](https://github.com/firecrawl/anydoc) extracts GitHub-Flavored Markdown from PDF, Word,
+PowerPoint, Excel, OpenDocument, RTF, EPUB, and CSV files. It does not render PDF pages or provide
+annotation geometry; page-accurate reading will require a separate renderer.
 
-## Document processing
+Scanned or image-only PDF pages are reported as needing OCR. Litrev does not silently enable
+Anydoc's hosted OCR option.
 
-[Anydoc](https://github.com/firecrawl/anydoc) is Litrev's local document parser. The official
-`firecrawl-anydoc` Python binding executes its Rust core and converts PDF, Word, PowerPoint, Excel,
-OpenDocument, RTF, EPUB, and CSV files to GitHub-Flavored Markdown.
+## Run locally
 
-Anydoc provides structured extraction, not visual page rendering. Litrev will need a separate PDF
-renderer for page-accurate reading, highlighting, and annotation geometry. Scanned or image-only
-PDF pages are reported as needing OCR; Litrev does not silently send documents to hosted OCR.
+Requirements:
 
-## Repository map
-
-```text
-AGENTS.md                    Instructions for coding agents
-docs/ROADMAP.md              Ordered product and implementation plan
-web/                         React and TypeScript interface
-src/litrev/                  Python service, domain, and persistence code
-src-tauri/                   Tauri desktop project
-tests/                       Python tests
-assets/                      Editable source assets
-package.json                 Frontend and desktop commands
-pyproject.toml               Python package and tooling
-mise.toml                    Rust toolchain declaration
-```
-
-Lockfiles are committed for each toolchain: `package-lock.json`, `uv.lock`, and
-`src-tauri/Cargo.lock`.
-
-## Requirements
-
-- Python 3.14 or newer
-- [uv](https://docs.astral.sh/uv/)
+- Python 3.14 or newer and [uv](https://docs.astral.sh/uv/)
 - Node.js and npm
 - [mise](https://mise.jdx.dev/) or an equivalent Rust installation
 - Tauri's operating-system prerequisites
 
-The repository declares the Rust toolchain in `mise.toml` and the Python version in
-`.python-version`.
-
-## Setup
+Install the declared toolchains and dependencies:
 
 ```bash
 mise install
@@ -106,13 +73,11 @@ uv sync
 npm install
 ```
 
-Run the interface and Python service in a browser:
+Run the browser workflow at `http://127.0.0.1:1420`:
 
 ```bash
 npm run dev
 ```
-
-Open `http://127.0.0.1:1420`.
 
 Run the same interface inside Tauri:
 
@@ -120,53 +85,25 @@ Run the same interface inside Tauri:
 npm run tauri dev
 ```
 
-Tauri starts the frontend and Python development service through its `beforeDevCommand`.
+### Docker browser workflow
 
-### Run the browser workflow in Docker
-
-Docker Compose runs the Vite browser interface and FastAPI service; it does not run the native
-Tauri window. Build and start the development container in the background:
+Docker Compose runs Vite and FastAPI, not the native Tauri window:
 
 ```bash
 docker volume create litrev-data
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:1420`. Compose bind-mounts the Python and React source directories. Vite
-updates the browser when frontend files change, and Uvicorn restarts the local API when Python or
-migration files change; ordinary code edits do not require an image rebuild. Changes to
-dependencies, lockfiles, the Dockerfile, or Compose configuration still require
-`docker compose up --build -d`.
+Source edits hot reload. Dependency, lockfile, Dockerfile, and Compose changes require a rebuild.
+Use `docker compose logs -f litrev` to follow logs and `docker compose down` to stop the container.
 
-Follow the development logs or stop the container with:
+The external `litrev-data` volume preserves the library across rebuilds and `docker compose down`.
+Remove it only after backing up the library and intentionally choosing to delete it.
 
-```bash
-docker compose logs -f litrev
-docker compose down
-```
+## Library data and safety
 
-The external `litrev-data` volume preserves the SQLite library and managed files across container
-rebuilds and `docker compose down`; creating it again is harmless. Compose does not delete this
-volume. Run `docker volume rm litrev-data` only when the library is backed up and deletion is
-intentional.
-
-## Local API
-
-The current development API is intentionally small:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/health` | Report local stack health and versions |
-| `GET` | `/api/sources` | List source records |
-| `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
-| `POST` | `/api/sources` | Create a manual book or paper record |
-| `POST` | `/api/imports` | Save a confirmed source and original document |
-| `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown with Anydoc |
-| `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
-
-The service binds to `127.0.0.1:8765`. Application data uses the operating system's standard
-per-user data directory through `platformdirs`; on Linux the default library is normally
-`~/.local/share/litrev/`. Litrev creates and manages this layout when the service starts:
+The service binds to `127.0.0.1:8765`. By default, Litrev stores its library in the operating
+system's per-user data directory; on Linux this is normally `~/.local/share/litrev/`.
 
 ```text
 litrev/
@@ -177,74 +114,63 @@ litrev/
 └── temporary-imports/
 ```
 
-Set `LITREV_DATA_DIR` to use a different library root during isolated development or testing. Tests
-also inject temporary library roots directly and must never read from or write to the real library.
-The database schema is upgraded explicitly with Alembic when the local API starts.
+Set `LITREV_DATA_DIR` to use an isolated library root. Tests inject temporary roots and must never
+touch the real library. Application startup applies forward-only Alembic migrations.
 
-## Private research data
+Do not commit copyrighted papers or real research databases. Development files that must live in
+the repository belong under ignored `local-data/`; PDF, SQLite, and SQLite journal files are also
+ignored as a second safeguard. Ignore rules are not encryption and do not untrack existing files.
 
-Do not add copyrighted papers or a real research database to Git. When a development file must be
-kept inside this repository, put it under `local-data/` (for example,
-`local-data/papers/paper.pdf`). The entire directory is ignored. As a second safeguard, `.gitignore`
-also excludes PDF files, SQLite database files, and SQLite journal files anywhere in the worktree.
+Selecting a document does not copy it. Confirming an import saves the original under
+`attachments/`; successful extraction saves Markdown under `extracted/`.
 
-The application database normally lives outside the repository in the operating system's per-user
-data directory, as described above. Selecting a document alone does not copy it. Confirming an
-import copies the original into the managed `attachments/` directory and writes extracted Markdown
-under `extracted/`; neither location is inside this repository by default. Ignore rules prevent new
-files from being added to the worktree, but they are not encryption and do not remove a file that
-Git was already tracking.
-
-Schema migrations are forward-only because automatically reversing a revision could destroy
-research data. Developers create and review new revisions with `uv run alembic revision
---autogenerate -m "description"`; application startup is responsible for applying them. Never run
-Alembic commands against the real library while developing a migration.
+When developing migrations, use an isolated library and never run Alembic commands against the
+real one.
 
 ### Backup and recovery
 
-Litrev does not yet have an in-app backup command. Until it does:
+Litrev does not yet provide in-app backup or restore. Until it does:
 
-1. Fully close Litrev so SQLite has no active transaction.
-2. Copy the entire library directory—not only `litrev.sqlite3`—to a separate backup location.
-3. Keep dated backups before application upgrades or consequential imports.
-4. To restore, close Litrev, move the current library aside, and copy the complete backup into its
-   place. Start Litrev and verify the sources and notes before deleting the moved copy.
+1. Close Litrev so no SQLite transaction is active.
+2. Copy the entire library directory, not only `litrev.sqlite3`, to a separate location.
+3. Keep dated backups before upgrades or consequential imports.
+4. To restore, close Litrev, move the current library aside, copy the backup into place, and verify
+   it before deleting the moved copy.
 
-Never overwrite the only copy of a library during recovery. A restored older database will be
-migrated forward on startup; migrations do not provide a way to recover documents or records that
-were already deleted before the backup was made.
+Never overwrite the only copy of a library. Migrations can upgrade an older backup, but they cannot
+recover files or records deleted before that backup was made.
+
+## Local API
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/health` | Report local stack health and versions |
+| `GET` | `/api/sources` | List sources |
+| `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
+| `POST` | `/api/sources` | Create a manual book or paper |
+| `PUT` | `/api/sources/{source_id}` | Replace a source's validated metadata and organization |
+| `POST` | `/api/imports` | Save a source and original document |
+| `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown |
+| `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
+| `DELETE` | `/api/attachments/{attachment_id}` | Remove a failed attachment and its files |
 
 ## Verification
-
-Python:
 
 ```bash
 uv run litrev --check
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
-```
-
-React and TypeScript:
-
-```bash
 npm run test:web
 npm run lint:web
 npm run build:web
-```
-
-Tauri and Rust:
-
-```bash
 mise exec -- cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-## Planning and agent handoff
+## Project guidance
 
-- [Roadmap](docs/ROADMAP.md) defines the milestone order, acceptance criteria, and recommended next
-  task.
-- [Agent instructions](AGENTS.md) define architectural boundaries, safety rules, checks, and the
-  definition of done.
+- [Roadmap](docs/ROADMAP.md) defines the milestone order and acceptance criteria.
+- [Agent instructions](AGENTS.md) define architecture, safety rules, and the definition of done.
 
-Future agents should begin with those documents, inspect the existing worktree, and work on the
-first unchecked milestone unless the user explicitly changes the priority.
+Start future work with the first unchecked item in the current roadmap milestone unless the user
+explicitly changes the priority.

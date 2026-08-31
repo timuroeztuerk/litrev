@@ -16,6 +16,14 @@ class ManagedFileConflictError(RuntimeError):
     pass
 
 
+class ManagedFileRecoveryError(RuntimeError):
+    pass
+
+
+class ManagedFileCleanupError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class LibraryPaths:
     root: Path
@@ -136,6 +144,115 @@ class ManagedExtractionStore:
         markdown_path = self.paths.root / expected_path
         _require_regular_file(markdown_path, expected_path)
         return markdown_path.read_text(encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class StagedManagedArtifactRemoval:
+    root: Path
+    directory: Path | None
+    files: tuple[tuple[Path, Path], ...]
+
+    def restore(self) -> None:
+        try:
+            for original, staged in reversed(self.files):
+                _require_safe_removal_path(self.root, original, "restore destination")
+                if original.exists():
+                    raise ManagedFileConflictError(
+                        f"Cannot restore managed artifact {original.name!r}; its path is occupied."
+                    )
+                original.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged, original)
+            if self.directory is not None:
+                self.directory.rmdir()
+        except Exception as error:
+            raise ManagedFileRecoveryError(
+                "A failed attachment removal could not restore its managed artifacts."
+            ) from error
+
+    def discard(self) -> None:
+        try:
+            for _original, staged in self.files:
+                staged.unlink(missing_ok=True)
+            if self.directory is not None:
+                self.directory.rmdir()
+        except Exception as error:
+            raise ManagedFileCleanupError(
+                "The attachment record was removed, but staged artifact cleanup did not finish."
+            ) from error
+
+
+def stage_managed_attachment_removal(
+    paths: LibraryPaths,
+    *,
+    checksum: str,
+    managed_path: str,
+    extracted_path: str | None,
+) -> StagedManagedArtifactRemoval:
+    attachment_store = ManagedAttachmentStore(paths)
+    expected_attachment = attachment_store.relative_path_for(checksum)
+    if managed_path != expected_attachment:
+        raise ManagedFileConflictError(
+            f"Attachment path {managed_path!r} does not match checksum {checksum!r}."
+        )
+
+    candidates = [(paths.root / expected_attachment, "original")]
+    if extracted_path is not None:
+        extraction_store = ManagedExtractionStore(paths)
+        expected_extraction = extraction_store.relative_path_for(checksum)
+        if extracted_path != expected_extraction:
+            raise ManagedFileConflictError(
+                f"Extracted path {extracted_path!r} does not match checksum {checksum!r}."
+            )
+        candidates.append((paths.root / expected_extraction, "extracted"))
+
+    existing: list[tuple[Path, str]] = []
+    for artifact, label in candidates:
+        _require_safe_removal_path(paths.root, artifact, label)
+        if artifact.exists():
+            existing.append((artifact, label))
+
+    if not existing:
+        return StagedManagedArtifactRemoval(root=paths.root, directory=None, files=())
+
+    paths.ensure_exists()
+    staging_directory = Path(tempfile.mkdtemp(dir=paths.temporary_imports, prefix="removal-"))
+    staged_files: list[tuple[Path, Path]] = []
+    try:
+        for artifact, label in existing:
+            staged = staging_directory / label
+            os.replace(artifact, staged)
+            staged_files.append((artifact, staged))
+    except Exception:
+        staged_removal = StagedManagedArtifactRemoval(
+            root=paths.root,
+            directory=staging_directory,
+            files=tuple(staged_files),
+        )
+        staged_removal.restore()
+        raise
+
+    return StagedManagedArtifactRemoval(
+        root=paths.root,
+        directory=staging_directory,
+        files=tuple(staged_files),
+    )
+
+
+def _require_safe_removal_path(root: Path, artifact: Path, label: str) -> None:
+    try:
+        artifact.relative_to(root)
+    except ValueError as error:
+        raise ManagedFileConflictError(
+            f"Managed {label} path is outside the library root."
+        ) from error
+
+    current = artifact
+    while current != root:
+        if current.is_symlink():
+            raise ManagedFileConflictError(f"Managed {label} path contains a symbolic link.")
+        current = current.parent
+    if artifact.exists() and not artifact.is_file():
+        raise ManagedFileConflictError(f"Managed {label} path is not a regular file.")
 
 
 def _require_regular_file(path: Path, relative_path: str) -> None:

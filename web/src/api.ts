@@ -1,11 +1,36 @@
 export type SourceType = "paper" | "book" | "other";
+export type ReadingStatus = "unread" | "reading" | "read";
 
 export interface Source {
   id: number;
   source_type: SourceType;
   title: string;
+  authors: string[];
+  publication_year: number | null;
+  venue: string | null;
   doi: string | null;
+  url: string | null;
+  abstract: string | null;
+  language: string | null;
+  reading_status: ReadingStatus;
+  tags: string[];
+  collections: string[];
   created_at: string;
+}
+
+export interface SourceUpdate {
+  source_type: SourceType;
+  title: string;
+  authors: string[];
+  publication_year: number | null;
+  venue: string | null;
+  doi: string | null;
+  url: string | null;
+  abstract: string | null;
+  language: string | null;
+  reading_status: ReadingStatus;
+  tags: string[];
+  collections: string[];
 }
 
 export type ConversionStatus =
@@ -31,6 +56,7 @@ export interface Attachment {
   conversion_message: string | null;
   conversion_diagnostics: Record<string, unknown> | null;
   has_extracted_text: boolean;
+  can_remove: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -88,6 +114,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(response.status, detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -101,6 +128,14 @@ export function getSources(signal?: AbortSignal): Promise<Source[]> {
 
 export function getSource(sourceId: number): Promise<SourceDetail> {
   return request<SourceDetail>(`/api/sources/${sourceId}`);
+}
+
+export function updateSource(sourceId: number, source: SourceUpdate): Promise<SourceDetail> {
+  return request<SourceDetail>(`/api/sources/${sourceId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(source),
+  });
 }
 
 export function createSource(sourceType: Exclude<SourceType, "other">, title: string): Promise<Source> {
@@ -134,4 +169,8 @@ export function convertAttachment(attachmentId: number): Promise<Attachment> {
 
 export function getExtractedText(attachmentId: number): Promise<ExtractedText> {
   return request<ExtractedText>(`/api/attachments/${attachmentId}/extracted-text`);
+}
+
+export function removeAttachment(attachmentId: number): Promise<void> {
+  return request<void>(`/api/attachments/${attachmentId}`, { method: "DELETE" });
 }
