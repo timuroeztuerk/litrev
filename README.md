@@ -40,6 +40,12 @@ implemented yet. The useful-library milestone is complete; the next bounded foll
 [DOI-first source capture](docs/ROADMAP.md#21-doi-first-source-capture), followed by reader locators
 and annotations.
 
+## Settings
+
+Open **Settings** at the bottom of the left panel to manage user preferences. Appearance is
+available there now, and further user-facing settings will be added in that location as Litrev
+grows.
+
 ## Architecture
 
 ```text

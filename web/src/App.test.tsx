@@ -98,6 +98,12 @@ async function renderLibrary(sources: Source[]) {
   await screen.findByText("Local service ready");
 }
 
+function openLibraryData() {
+  const summary = screen.getByText("Library data").closest("summary");
+  if (!summary) throw new Error("Library data summary was not rendered.");
+  fireEvent.click(summary);
+}
+
 function sourceOrder(): string[] {
   return screen.getAllByRole("listitem").map((item) => {
     const title = item.querySelector("strong")?.textContent;
@@ -124,6 +130,12 @@ test("defaults to dark mode and saves a light-mode preference", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
 
+  const settingsButton = screen.getByRole("button", { name: "Settings" });
+  expect(settingsButton.closest(".sidebar-footer")).not.toBeNull();
+  fireEvent.click(settingsButton);
+
+  expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toHaveFocus();
+  expect(settingsButton).toHaveAttribute("aria-current", "page");
   const toggle = screen.getByRole("button", { name: "Switch to light mode" });
 
   expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -144,6 +156,7 @@ test("uses the saved theme preference", async () => {
 
   render(<App />);
   await screen.findByText("Local service ready");
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
   expect(screen.getByRole("button", { name: "Switch to dark mode" })).toHaveAttribute(
     "aria-pressed",
@@ -370,7 +383,7 @@ test("newly added sources immediately respect active discovery controls", async 
   fetchMock.mockResolvedValueOnce(response(added, 201));
   fireEvent.change(screen.getByLabelText("Type"), { target: { value: "book" } });
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Wanted book" } });
-  fireEvent.click(screen.getByRole("button", { name: "Add to library" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
 
   expect(await screen.findByRole("button", { name: /Wanted book/ })).toBeInTheDocument();
   expect(screen.getByText("1 of 2 sources")).toBeInTheDocument();
@@ -441,6 +454,34 @@ test("edited sources immediately respect active discovery controls", async () =>
   ).toBeInTheDocument();
 });
 
+test("keeps secondary capture workflows compact until the user opens them", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+
+  expect(screen.getByPlaceholderText("Enter a book or paper title")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Source title")).not.toBeInTheDocument();
+  expect(screen.getByText("Library data").closest("details")).not.toHaveAttribute("open");
+
+  const file = new File(["%PDF example"], "compact-paper.pdf", {
+    type: "application/pdf",
+  });
+  fireEvent.change(screen.getByLabelText("Choose a document"), { target: { files: [file] } });
+
+  expect(screen.getByRole("heading", { level: 3, name: "compact-paper.pdf" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Source title")).toHaveValue("compact paper");
+  expect(screen.getByLabelText("Source title")).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByLabelText("Source title")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Import document" })).toHaveFocus();
+
+  openLibraryData();
+  expect(screen.getByText("Library data").closest("details")).toHaveAttribute("open");
+  expect(screen.getByRole("button", { name: "Import bibliography" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Export library" })).toBeInTheDocument();
+});
+
 test("quickly captures a book through the local API", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
@@ -460,7 +501,7 @@ test("quickly captures a book through the local API", async () => {
   fireEvent.change(screen.getByLabelText("Title"), {
     target: { value: "The Dawn of Everything" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Add to library" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
 
   const source = await screen.findByRole("listitem");
   expect(within(source).getByText("The Dawn of Everything")).toBeInTheDocument();
@@ -486,7 +527,7 @@ test("keeps the title and explains when a source cannot be saved", async () => {
 
   fetchMock.mockResolvedValueOnce({ ok: false, status: 500 });
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "A useful paper" } });
-  fireEvent.click(screen.getByRole("button", { name: "Add to library" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "The source could not be saved. Check the local service and try again.",
@@ -499,7 +540,7 @@ test("requires a source title before making a request", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
 
-  fireEvent.click(screen.getByRole("button", { name: "Add to library" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add source" }));
 
   expect(screen.getByRole("alert")).toHaveTextContent("Enter a title to add this source.");
   expect(screen.getByLabelText("Title")).toHaveFocus();
@@ -509,6 +550,7 @@ test("requires a source title before making a request", async () => {
 test("imports a bibliography, reports DOI skips, and adds sources to the library", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   const first = makeSource({ id: 21, title: "Imported paper", doi: "10.1234/paper" });
   const second = makeSource({
@@ -572,6 +614,7 @@ test("imports a bibliography, reports DOI skips, and adds sources to the library
 test("requires a bibliography selection before making a request", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   fireEvent.click(screen.getByRole("button", { name: "Import bibliography" }));
 
@@ -585,6 +628,7 @@ test("requires a bibliography selection before making a request", async () => {
 test("keeps a bibliography selected when the service rejects it", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   fetchMock.mockResolvedValueOnce(
     response(
@@ -614,6 +658,7 @@ test("keeps a bibliography selected when the service rejects it", async () => {
 test("exports the selected format with loading and browser download feedback", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   const bibliographyBlob = new Blob(['[{"title":"Evidence"}]'], {
     type: "application/vnd.citationstyles.csl+json",
@@ -662,6 +707,7 @@ test("exports the selected format with loading and browser download feedback", a
 test("reports an empty library and returns focus to the export format", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   fetchMock.mockResolvedValueOnce(
     response(
@@ -687,6 +733,7 @@ test("reports an empty library and returns focus to the export format", async ()
 test("reports a service failure when the library cannot be exported", async () => {
   render(<App />);
   await screen.findByText("Local service ready");
+  openLibraryData();
 
   fetchMock.mockResolvedValueOnce(response({}, 500));
   fireEvent.click(screen.getByRole("button", { name: "Export library" }));
@@ -1460,7 +1507,7 @@ test("retries startup after the local service becomes available", async () => {
   render(<App />);
 
   await screen.findByText("Local service unavailable");
-  expect(screen.getByRole("button", { name: "Add to library" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add source" })).toBeDisabled();
 
   const file = new File(["paper,year"], "paper.csv", { type: "text/csv" });
   fireEvent.change(screen.getByLabelText("Choose a document"), { target: { files: [file] } });
@@ -1469,6 +1516,7 @@ test("retries startup after the local service becomes available", async () => {
   const bibliography = new File(["@article{example}"], "sources.bib", {
     type: "application/x-bibtex",
   });
+  openLibraryData();
   fireEvent.change(screen.getByLabelText("Choose a bibliography"), {
     target: { files: [bibliography] },
   });
@@ -1486,7 +1534,7 @@ test("retries startup after the local service becomes available", async () => {
 
   expect(screen.getByText("Connecting locally")).toBeInTheDocument();
   await screen.findByText("Local service ready");
-  expect(screen.getByRole("button", { name: "Add to library" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Add source" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Save and extract" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Import bibliography" })).toBeEnabled();
 });

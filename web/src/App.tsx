@@ -308,6 +308,7 @@ export default function App() {
   const [readingStatusFilter, setReadingStatusFilter] = useState<ReadingStatus | "all">("all");
   const [tagFilter, setTagFilter] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus>("connecting");
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [serviceAttempt, setServiceAttempt] = useState(0);
@@ -342,25 +343,27 @@ export default function App() {
   const [loadingTextAttachmentId, setLoadingTextAttachmentId] = useState<number | null>(null);
   const [textError, setTextError] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(loadDarkModePreference);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
   const importTitleInput = useRef<HTMLInputElement>(null);
+  const documentActionButton = useRef<HTMLButtonElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
   const bibliographyInput = useRef<HTMLInputElement>(null);
   const bibliographyExportSelect = useRef<HTMLSelectElement>(null);
   const libraryHeading = useRef<HTMLHeadingElement>(null);
+  const settingsHeading = useRef<HTMLHeadingElement>(null);
   const librarySearchInput = useRef<HTMLInputElement>(null);
+  const filterToggleButton = useRef<HTMLButtonElement>(null);
   const sourceRequest = useRef(0);
   const textRequest = useRef(0);
   const serviceReady = serviceStatus === "ready";
   const isImporting = importStage === "saving" || importStage === "converting";
   const normalizedQuery = searchText.trim().toLocaleLowerCase();
-  const discoveryControlsActive =
-    normalizedQuery !== "" ||
-    discoverySort !== "title" ||
-    sourceTypeFilter !== "all" ||
-    readingStatusFilter !== "all" ||
-    tagFilter !== "" ||
-    collectionFilter !== "";
+  const activeFilterCount =
+    Number(sourceTypeFilter !== "all") +
+    Number(readingStatusFilter !== "all") +
+    Number(tagFilter !== "") +
+    Number(collectionFilter !== "");
   const availableTags = useMemo(
     () =>
       [...new Set([...sources.flatMap((source) => source.tags), ...(tagFilter ? [tagFilter] : [])])]
@@ -382,6 +385,9 @@ export default function App() {
       bibliographyExportSelect.current?.focus();
     }
   }, [bibliographyExportFeedback, isExportingBibliography]);
+  useEffect(() => {
+    if (document) importTitleInput.current?.focus();
+  }, [document]);
   const visibleSources = useMemo(
     () =>
       sources
@@ -416,6 +422,10 @@ export default function App() {
   useEffect(() => {
     if (!selectedSource && libraryNotice) libraryHeading.current?.focus();
   }, [libraryNotice, selectedSource]);
+
+  useEffect(() => {
+    if (isSettingsOpen) settingsHeading.current?.focus();
+  }, [isSettingsOpen]);
 
   useEffect(() => {
     let active = true;
@@ -467,6 +477,14 @@ export default function App() {
     librarySearchInput.current?.focus();
   }
 
+  function clearSourceFilters() {
+    setSourceTypeFilter("all");
+    setReadingStatusFilter("all");
+    setTagFilter("");
+    setCollectionFilter("");
+    filterToggleButton.current?.focus();
+  }
+
   function resetExtractedText() {
     textRequest.current += 1;
     setLoadingTextAttachmentId(null);
@@ -476,6 +494,18 @@ export default function App() {
 
   function showLibrary() {
     sourceRequest.current += 1;
+    setIsSettingsOpen(false);
+    setSelectedSource(null);
+    setIsLoadingSource(false);
+    setSourceError(null);
+    setDetailNotice(null);
+    setLibraryNotice(null);
+    resetExtractedText();
+  }
+
+  function showSettings() {
+    sourceRequest.current += 1;
+    setIsSettingsOpen(true);
     setSelectedSource(null);
     setIsLoadingSource(false);
     setSourceError(null);
@@ -491,6 +521,7 @@ export default function App() {
     setSourceError(null);
     setDetailNotice(null);
     setLibraryNotice(null);
+    setIsSettingsOpen(false);
     resetExtractedText();
     try {
       const source = await getSource(sourceId);
@@ -513,6 +544,11 @@ export default function App() {
     setImportStage("idle");
     setImportFeedback(null);
     if (documentInput.current) documentInput.current.value = "";
+  }
+
+  function cancelImportSelection() {
+    clearImportSelection();
+    documentActionButton.current?.focus();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -926,7 +962,8 @@ export default function App() {
         </div>
         <nav aria-label="Workspace">
           <button
-            className="nav-item active"
+            aria-current={isSettingsOpen ? undefined : "page"}
+            className={`nav-item ${isSettingsOpen ? "" : "active"}`}
             disabled={isRemovingSource}
             onClick={showLibrary}
             type="button"
@@ -941,36 +978,47 @@ export default function App() {
             Research map
           </button>
         </nav>
-        <div className={`service-status ${serviceStatus}`} role="status">
-          <span aria-hidden="true" className="status-dot" />
-          {serviceStatusLabels[serviceStatus]}
+        <div className="sidebar-footer">
+          <button
+            aria-current={isSettingsOpen ? "page" : undefined}
+            className={`nav-item settings-nav-item ${isSettingsOpen ? "active" : ""}`}
+            disabled={isRemovingSource}
+            onClick={showSettings}
+            type="button"
+          >
+            Settings
+          </button>
+          <div className={`service-status ${serviceStatus}`} role="status">
+            <span aria-hidden="true" className="status-dot" />
+            {serviceStatusLabels[serviceStatus]}
+          </div>
         </div>
       </aside>
 
       <div className="workspace">
         <header className="page-header">
           <div>
-            <p className="eyebrow">{selectedSource ? "Source detail" : "Research workspace"}</p>
-            <h1>{selectedSource?.title ?? "Your library"}</h1>
+            <p className="eyebrow">
+              {isSettingsOpen
+                ? "Application preferences"
+                : selectedSource
+                  ? "Source detail"
+                  : "Research workspace"}
+            </p>
+            <h1
+              ref={isSettingsOpen ? settingsHeading : undefined}
+              tabIndex={isSettingsOpen ? -1 : undefined}
+            >
+              {isSettingsOpen ? "Settings" : (selectedSource?.title ?? "Your library")}
+            </h1>
             <p>
-              {selectedSource
-                ? "Review its metadata, saved documents, and extracted text."
-                : "Collect papers and keep every idea connected to its source."}
+              {isSettingsOpen
+                ? "Manage how Litrev works for you."
+                : selectedSource
+                  ? "Review its metadata, saved documents, and extracted text."
+                  : "Collect papers and keep every idea connected to its source."}
             </p>
           </div>
-          <button
-            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={isDarkMode}
-            className="theme-toggle"
-            onClick={() => setIsDarkMode((current) => !current)}
-            title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-            type="button"
-          >
-            <svg aria-hidden="true" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-            </svg>
-          </button>
         </header>
 
         <main>
@@ -983,7 +1031,28 @@ export default function App() {
             </div>
           )}
 
-          {isLoadingSource ? (
+          {isSettingsOpen ? (
+            <section className="settings-panel" aria-labelledby="appearance-heading">
+              <div>
+                <p className="eyebrow">Appearance</p>
+                <h2 id="appearance-heading">Color theme</h2>
+                <p>Choose the theme used throughout your local workspace.</p>
+              </div>
+              <button
+                aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                aria-pressed={isDarkMode}
+                className="theme-toggle"
+                onClick={() => setIsDarkMode((current) => !current)}
+                title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                type="button"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+                </svg>
+              </button>
+            </section>
+          ) : isLoadingSource ? (
             <p className="loading-message" role="status">
               Opening source…
             </p>
@@ -1011,15 +1080,22 @@ export default function App() {
           ) : (
             <>
               <section className="capture-panel" aria-labelledby="capture-heading">
-                <div className="capture-copy">
+                <div className="capture-heading">
                   <p className="eyebrow">Quick capture</p>
                   <h2 id="capture-heading">Add a source</h2>
-                  <p>Save a book or paper by typing its title.</p>
+                  <p>Enter a title, or start from a document on this device.</p>
                 </div>
-                <form aria-busy={isSavingSource} noValidate onSubmit={handleSubmit}>
-                  <div className="capture-fields">
+                <form
+                  aria-busy={isSavingSource}
+                  className="title-capture-form"
+                  noValidate
+                  onSubmit={handleSubmit}
+                >
+                  <div className="capture-bar">
                     <div className="form-field">
-                      <label htmlFor="source-type">Type</label>
+                      <label className="visually-hidden" htmlFor="source-type">
+                        Type
+                      </label>
                       <select
                         id="source-type"
                         value={sourceType}
@@ -1033,7 +1109,9 @@ export default function App() {
                       </select>
                     </div>
                     <div className="form-field">
-                      <label htmlFor="source-title">Title</label>
+                      <label className="visually-hidden" htmlFor="source-title">
+                        Title
+                      </label>
                       <input
                         aria-describedby={captureFeedback ? "capture-feedback" : undefined}
                         aria-invalid={captureFeedback?.kind === "error"}
@@ -1045,13 +1123,13 @@ export default function App() {
                           setTitle(event.target.value);
                           setCaptureFeedback(null);
                         }}
-                        placeholder="e.g. The Structure of Scientific Revolutions"
+                        placeholder="Enter a book or paper title"
                         ref={titleInput}
                         value={title}
                       />
                     </div>
                     <button disabled={!serviceReady || isSavingSource} type="submit">
-                      {isSavingSource ? "Adding…" : "Add to library"}
+                      {isSavingSource ? "Adding…" : "Add source"}
                     </button>
                   </div>
                   {captureFeedback && (
@@ -1064,17 +1142,25 @@ export default function App() {
                     </p>
                   )}
                 </form>
-              </section>
 
-              <section className="document-panel" aria-labelledby="document-heading">
-                <div className="document-copy">
-                  <p className="eyebrow">Local document import</p>
-                  <h2 id="document-heading">Add a document</h2>
-                  <p>Inspect the selected file, confirm its source, then save and extract it locally.</p>
-                </div>
-                <form aria-busy={isImporting} noValidate onSubmit={handleDocumentImport}>
-                  <label htmlFor="document-file">Choose a document</label>
+                <div className="document-action">
+                  <div>
+                    <strong>Have the document?</strong>
+                    <span>Import it for local storage and text extraction.</span>
+                  </div>
+                  <button
+                    disabled={isImporting}
+                    onClick={() => documentInput.current?.click()}
+                    ref={documentActionButton}
+                    type="button"
+                  >
+                    {document ? "Choose another" : "Import document"}
+                  </button>
+                  <label className="visually-hidden" htmlFor="document-file">
+                    Choose a document
+                  </label>
                   <input
+                    className="visually-hidden"
                     id="document-file"
                     type="file"
                     accept=".pdf,.doc,.docx,.odt,.rtf,.epub,.ppt,.pptx,.xls,.xlsx,.ods,.odp,.csv"
@@ -1088,17 +1174,28 @@ export default function App() {
                       setImportFeedback(null);
                     }}
                   />
+                </div>
 
-                  {document && (
+                {document && (
+                  <form
+                    aria-busy={isImporting}
+                    className="document-review"
+                    noValidate
+                    onSubmit={handleDocumentImport}
+                  >
+                    <div className="document-review-heading">
+                      <div>
+                        <p className="inspection-label">Selected document</p>
+                        <h3>{document.name}</h3>
+                      </div>
+                      <button disabled={isImporting} onClick={cancelImportSelection} type="button">
+                        Cancel
+                      </button>
+                    </div>
                     <div className="file-inspection">
-                      <p className="inspection-label">Selected document</p>
                       <dl>
                         <div>
-                          <dt>File</dt>
-                          <dd>{document.name}</dd>
-                        </div>
-                        <div>
-                          <dt>Detected type</dt>
+                          <dt>Type</dt>
                           <dd>{detectedFileType(document)}</dd>
                         </div>
                         <div>
@@ -1166,28 +1263,26 @@ export default function App() {
                         </li>
                       </ol>
                     </div>
-                  )}
-                  {importFeedback && (
-                    <p
-                      className={`capture-feedback ${importFeedback.kind}`}
-                      id="import-feedback"
-                      role={importFeedback.kind === "error" ? "alert" : "status"}
-                    >
-                      {importFeedback.message}
-                    </p>
-                  )}
-                </form>
+                    {importFeedback && (
+                      <p
+                        className={`capture-feedback ${importFeedback.kind}`}
+                        id="import-feedback"
+                        role={importFeedback.kind === "error" ? "alert" : "status"}
+                      >
+                        {importFeedback.message}
+                      </p>
+                    )}
+                  </form>
+                )}
               </section>
 
-              <section className="bibliography-panel" aria-labelledby="bibliography-heading">
-                <div className="capture-copy">
-                  <p className="eyebrow">Bibliography files</p>
-                  <h2 id="bibliography-heading">Import and export</h2>
-                  <p>
-                    Move source metadata through BibTeX, RIS, or CSL JSON while keeping saved
-                    identifiers.
-                  </p>
-                </div>
+              <details className="library-data-panel">
+                <summary>
+                  <span className="library-data-summary-copy">
+                    <strong>Library data</strong>
+                    <span>Import or export BibTeX, RIS, and CSL JSON</span>
+                  </span>
+                </summary>
                 <div className="bibliography-workflows">
                   <form
                     aria-busy={isImportingBibliography}
@@ -1277,7 +1372,7 @@ export default function App() {
                     )}
                   </form>
                 </div>
-              </section>
+              </details>
 
               {sourceError && (
                 <p className="error-message" role="alert">
