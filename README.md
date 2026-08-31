@@ -174,6 +174,7 @@ recover files or records deleted before that backup was made.
 | `POST` | `/api/sources` | Create a manual book or paper |
 | `PUT` | `/api/sources/{source_id}` | Replace a source's validated metadata and organization |
 | `DELETE` | `/api/sources/{source_id}` | Remove a source, its relationships, and managed files |
+| `POST` | `/api/doi-metadata-previews` | Preview Crossref metadata for a DOI without saving it |
 | `POST` | `/api/sources/{source_id}/doi-metadata-lookups` | Retrieve a reviewable Crossref proposal for the saved DOI |
 | `POST` | `/api/sources/{source_id}/doi-metadata-lookups/{lookup_id}/apply` | Apply explicitly selected proposal fields and save provenance |
 | `POST` | `/api/bibliography-imports` | Import source metadata from BibTeX, RIS, or CSL JSON |

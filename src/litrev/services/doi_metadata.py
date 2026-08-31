@@ -23,6 +23,10 @@ class DoiMetadataError(Exception):
     pass
 
 
+class InvalidDoiError(DoiMetadataError):
+    pass
+
+
 class DoiMetadataNotFoundError(DoiMetadataError):
     pass
 
@@ -66,12 +70,33 @@ class DoiMetadata:
 CrossrefFetch = Callable[[Request], bytes]
 
 
+def normalize_doi_for_lookup(doi: str) -> str:
+    normalized = normalize_imported_doi(doi)
+    prefix, separator, suffix = normalized.partition("/")
+    prefix_segments = prefix.split(".")
+    if not normalized:
+        raise InvalidDoiError("Enter a DOI to look up.")
+    if (
+        len(normalized) > 255
+        or separator != "/"
+        or len(prefix_segments) < 2
+        or prefix_segments[0].casefold() != "10"
+        or any(not segment for segment in prefix_segments)
+        or not suffix
+        or any(character.isspace() or ord(character) < 32 for character in normalized)
+    ):
+        raise InvalidDoiError(
+            "Enter a DOI with a 10. prefix and a non-empty suffix separated by a slash."
+        )
+    return normalized
+
+
 def lookup_crossref_metadata(
     doi: str,
     *,
     fetch: CrossrefFetch | None = None,
 ) -> DoiMetadata:
-    requested_doi = normalize_imported_doi(doi)
+    requested_doi = normalize_doi_for_lookup(doi)
     provider_url = crossref_record_url(requested_doi)
     request = Request(
         provider_url,

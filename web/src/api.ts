@@ -125,6 +125,31 @@ export interface DoiMetadataLookup {
   conflicting_fields: DoiMetadataField[];
 }
 
+export interface ExistingDoiSource {
+  id: number;
+  source_type: SourceType;
+  title: string;
+  doi: string;
+}
+
+export type DoiMetadataPreview =
+  | {
+      kind: "existing_source";
+      normalized_doi: string;
+      existing_source: ExistingDoiSource;
+    }
+  | {
+      kind: "proposal";
+      normalized_doi: string;
+      provider: string;
+      provider_url: string;
+      retrieved_doi: string;
+      retrieved_at: string;
+      proposal_fingerprint: string;
+      proposal: DoiMetadataProposal;
+      available_fields: DoiMetadataField[];
+    };
+
 export interface ImportedDocument {
   source: Source;
   attachment: Attachment;
@@ -225,6 +250,14 @@ export function updateSource(sourceId: number, source: SourceUpdate): Promise<So
 export function createDoiMetadataLookup(sourceId: number): Promise<DoiMetadataLookup> {
   return request<DoiMetadataLookup>(`/api/sources/${sourceId}/doi-metadata-lookups`, {
     method: "POST",
+  });
+}
+
+export function createDoiMetadataPreview(doi: string): Promise<DoiMetadataPreview> {
+  return request<DoiMetadataPreview>("/api/doi-metadata-previews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ doi }),
   });
 }
 

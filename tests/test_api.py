@@ -14,6 +14,7 @@ from litrev.infrastructure.models import (
     CollectionRecord,
     SourceIdentifierRecord,
     SourceMetadataLookupRecord,
+    SourceRecord,
     TagRecord,
 )
 from litrev.infrastructure.storage import LibraryPaths
@@ -900,6 +901,144 @@ async def test_source_metadata_update_reuses_unchanged_identifier_records() -> N
 
 
 @pytest.mark.anyio
+async def test_doi_metadata_preview_is_normalized_deterministic_and_read_only() -> None:
+    database = Database.in_memory()
+    provider_calls: list[str] = []
+
+    def provider(doi: str) -> DoiMetadata:
+        provider_calls.append(doi)
+        return doi_metadata(
+            doi="10.1234/Example",
+            title="Changed provider title" if len(provider_calls) == 3 else "Crossref title",
+        )
+
+    application = create_app(database, doi_metadata_provider=provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        first = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": " https://doi.org/10.1234/Example "},
+        )
+        second = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "doi:10.1234/Example"},
+        )
+        changed = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/Example"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    preview = first.json()
+    assert preview["kind"] == "proposal"
+    assert preview["normalized_doi"] == "10.1234/Example"
+    assert preview["provider"] == "Crossref"
+    assert preview["provider_url"] == "https://api.crossref.org/works/10.1234%2FExample"
+    assert preview["retrieved_doi"] == "10.1234/Example"
+    assert len(preview["proposal_fingerprint"]) == 64
+    assert preview["proposal_fingerprint"] == second.json()["proposal_fingerprint"]
+    assert preview["proposal_fingerprint"] != changed.json()["proposal_fingerprint"]
+    assert preview["proposal"] == {
+        "source_type": "paper",
+        "title": "Crossref title",
+        "authors": ["Ada Lovelace", "Research Collective"],
+        "publication_year": 2024,
+        "venue": "Crossref Journal",
+        "url": "https://doi.org/10.1234/example",
+        "abstract": "Crossref abstract.",
+        "language": "en",
+        "identifiers": [
+            {"identifier_type": "isbn", "value": "978-0-306-40615-7"},
+            {"identifier_type": "issn", "value": "2049-3630"},
+        ],
+    }
+    assert preview["available_fields"] == [
+        "source_type",
+        "title",
+        "authors",
+        "publication_year",
+        "venue",
+        "url",
+        "abstract",
+        "language",
+        "identifiers",
+    ]
+    assert provider_calls == ["10.1234/Example", "10.1234/Example", "10.1234/Example"]
+    with database.session() as session:
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+        assert session.query(SourceRecord).count() == 0
+
+
+@pytest.mark.anyio
+async def test_doi_metadata_preview_returns_a_canonical_duplicate_without_provider_call() -> None:
+    def unexpected_provider(_doi: str) -> DoiMetadata:
+        raise AssertionError("The provider must not be contacted for a saved DOI")
+
+    database = Database.in_memory()
+    application = create_app(database, doi_metadata_provider=unexpected_provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        created = await client.post(
+            "/api/sources",
+            json={
+                "source_type": "book",
+                "title": "Existing source",
+                "doi": "10.1234/Existing",
+            },
+        )
+        preview = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "https://doi.org/10.1234/existing"},
+        )
+
+    assert preview.status_code == 200
+    assert preview.json() == {
+        "kind": "existing_source",
+        "normalized_doi": "10.1234/existing",
+        "existing_source": {
+            "id": created.json()["id"],
+            "source_type": "book",
+            "title": "Existing source",
+            "doi": "10.1234/Existing",
+        },
+    }
+    with database.session() as session:
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "doi",
+    ["", "not-a-doi", "10./missing-prefix", "10.1234/", "10.1234/has space"],
+)
+async def test_doi_metadata_preview_rejects_unusable_input_before_provider_call(doi: str) -> None:
+    def unexpected_provider(_doi: str) -> DoiMetadata:
+        raise AssertionError("Invalid DOI input must be rejected before contacting the provider")
+
+    database = Database.in_memory()
+    application = create_app(database, doi_metadata_provider=unexpected_provider)
+    transport = httpx2.ASGITransport(app=application)
+    async with (
+        application.router.lifespan_context(application),
+        httpx2.AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        rejected = await client.post("/api/doi-metadata-previews", json={"doi": doi})
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "invalid_doi"
+    with database.session() as session:
+        assert session.query(SourceMetadataLookupRecord).count() == 0
+        assert session.query(SourceRecord).count() == 0
+
+
+@pytest.mark.anyio
 async def test_doi_metadata_is_reviewed_before_selected_fields_are_applied() -> None:
     database = Database.in_memory()
     provider_calls: list[str] = []
@@ -1136,10 +1275,16 @@ async def test_doi_metadata_provider_failures_are_actionable_and_save_nothing(
             },
         )
         rejected = await client.post(f"/api/sources/{created.json()['id']}/doi-metadata-lookups")
+        preview_rejected = await client.post(
+            "/api/doi-metadata-previews",
+            json={"doi": "10.1234/preview"},
+        )
 
     assert rejected.status_code == status_code
     assert rejected.json()["detail"]["code"] == code
     assert rejected.json()["detail"]["message"] == str(provider_error)
+    assert preview_rejected.status_code == status_code
+    assert preview_rejected.json()["detail"] == rejected.json()["detail"]
     with database.session() as session:
         assert session.query(SourceMetadataLookupRecord).count() == 0
 

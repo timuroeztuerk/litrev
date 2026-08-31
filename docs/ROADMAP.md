@@ -94,7 +94,7 @@ This slice reuses the completed Crossref client, canonical metadata proposal, id
 and provenance model. It must not introduce a second DOI parser, a parallel metadata model, or an
 automatic lookup on page load.
 
-- [ ] Add a source-independent DOI preview endpoint.
+- [x] Add a source-independent DOI preview endpoint.
   - Accept one DOI, normalize it through the authoritative DOI boundary, and reject empty or
     unusable input before networking.
   - Check the library for an existing canonical DOI before contacting Crossref. Return the existing

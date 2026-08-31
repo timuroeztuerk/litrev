@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -74,8 +76,10 @@ from litrev.services.doi_metadata import (
     DoiMetadataNotFoundError,
     DoiMetadataRateLimitedError,
     DoiMetadataUnavailableError,
+    InvalidDoiError,
     crossref_record_url,
     lookup_crossref_metadata,
+    normalize_doi_for_lookup,
 )
 from litrev.services.sources import (
     SourceNotFoundError,
@@ -235,6 +239,35 @@ class DoiMetadataLookupRead(BaseModel):
     conflicting_fields: list[DoiMetadataField]
 
 
+class DoiMetadataPreviewCreate(BaseModel):
+    doi: str
+
+
+class ExistingDoiSourceRead(BaseModel):
+    id: int
+    source_type: SourceType
+    title: str
+    doi: str
+
+
+class ExistingDoiMetadataPreviewRead(BaseModel):
+    kind: Literal["existing_source"]
+    normalized_doi: str
+    existing_source: ExistingDoiSourceRead
+
+
+class ProviderDoiMetadataPreviewRead(BaseModel):
+    kind: Literal["proposal"]
+    normalized_doi: str
+    provider: str
+    provider_url: str
+    retrieved_doi: str
+    retrieved_at: datetime
+    proposal_fingerprint: str
+    proposal: DoiMetadataProposalRead
+    available_fields: list[DoiMetadataField]
+
+
 class DoiMetadataApply(BaseModel):
     fields: list[DoiMetadataField]
 
@@ -375,6 +408,59 @@ def create_app(
         return _read_source_detail(active_database, source_id)
 
     @application.post(
+        "/api/doi-metadata-previews",
+        response_model=ExistingDoiMetadataPreviewRead | ProviderDoiMetadataPreviewRead,
+    )
+    async def preview_doi_metadata(
+        preview: DoiMetadataPreviewCreate,
+    ) -> ExistingDoiMetadataPreviewRead | ProviderDoiMetadataPreviewRead:
+        normalized_doi = _normalize_doi_for_api(preview.doi)
+
+        with active_database.session() as session:
+            existing_source = next(
+                (
+                    record
+                    for record in session.scalars(
+                        select(SourceRecord)
+                        .where(SourceRecord.doi.is_not(None))
+                        .order_by(SourceRecord.id)
+                    )
+                    if record.doi is not None and doi_key(record.doi) == doi_key(normalized_doi)
+                ),
+                None,
+            )
+            if existing_source is not None:
+                assert existing_source.doi is not None
+                return ExistingDoiMetadataPreviewRead(
+                    kind="existing_source",
+                    normalized_doi=normalized_doi,
+                    existing_source=ExistingDoiSourceRead(
+                        id=existing_source.id,
+                        source_type=SourceType(existing_source.source_type),
+                        title=existing_source.title,
+                        doi=existing_source.doi,
+                    ),
+                )
+
+        metadata = await _retrieve_doi_metadata(doi_metadata_provider, normalized_doi)
+        proposal = _doi_metadata_proposal(metadata)
+        return ProviderDoiMetadataPreviewRead(
+            kind="proposal",
+            normalized_doi=normalized_doi,
+            provider=CROSSREF_PROVIDER,
+            provider_url=crossref_record_url(metadata.doi),
+            retrieved_doi=metadata.doi,
+            retrieved_at=datetime.now(UTC),
+            proposal_fingerprint=_doi_metadata_proposal_fingerprint(
+                normalized_doi,
+                metadata,
+                proposal,
+            ),
+            proposal=proposal,
+            available_fields=_available_doi_metadata_fields(proposal),
+        )
+
+    @application.post(
         "/api/sources/{source_id}/doi-metadata-lookups",
         response_model=DoiMetadataLookupRead,
     )
@@ -391,30 +477,9 @@ def create_app(
                         "message": "Add a DOI to this source before looking up metadata.",
                     },
                 )
-            requested_doi = record.doi
+            requested_doi = _normalize_doi_for_api(record.doi)
 
-        try:
-            metadata = await run_in_threadpool(doi_metadata_provider, requested_doi)
-        except DoiMetadataNotFoundError as error:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "doi_metadata_not_found", "message": str(error)},
-            ) from error
-        except DoiMetadataRateLimitedError as error:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={"code": "doi_metadata_rate_limited", "message": str(error)},
-            ) from error
-        except DoiMetadataUnavailableError as error:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "doi_metadata_unavailable", "message": str(error)},
-            ) from error
-        except (DoiMetadataMalformedError, DoiMetadataMismatchError) as error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": "invalid_doi_metadata", "message": str(error)},
-            ) from error
+        metadata = await _retrieve_doi_metadata(doi_metadata_provider, requested_doi)
 
         proposal = _doi_metadata_proposal(metadata)
         with active_database.session() as session:
@@ -948,6 +1013,49 @@ def _clean_source_title(title: str) -> str:
     return clean_title
 
 
+def _normalize_doi_for_api(doi: str) -> str:
+    try:
+        return normalize_doi_for_lookup(doi)
+    except InvalidDoiError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_doi", "message": str(error)},
+        ) from error
+
+
+async def _retrieve_doi_metadata(
+    provider: Callable[[str], DoiMetadata],
+    doi: str,
+) -> DoiMetadata:
+    try:
+        return await run_in_threadpool(provider, doi)
+    except InvalidDoiError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "invalid_doi", "message": str(error)},
+        ) from error
+    except DoiMetadataNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "doi_metadata_not_found", "message": str(error)},
+        ) from error
+    except DoiMetadataRateLimitedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "doi_metadata_rate_limited", "message": str(error)},
+        ) from error
+    except DoiMetadataUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "doi_metadata_unavailable", "message": str(error)},
+        ) from error
+    except (DoiMetadataMalformedError, DoiMetadataMismatchError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "invalid_doi_metadata", "message": str(error)},
+        ) from error
+
+
 def _doi_metadata_proposal(metadata: DoiMetadata) -> DoiMetadataProposalRead:
     return DoiMetadataProposalRead(
         source_type=metadata.source_type,
@@ -970,6 +1078,26 @@ def _doi_metadata_proposal(metadata: DoiMetadata) -> DoiMetadataProposalRead:
             else None
         ),
     )
+
+
+def _doi_metadata_proposal_fingerprint(
+    requested_doi: str,
+    metadata: DoiMetadata,
+    proposal: DoiMetadataProposalRead,
+) -> str:
+    payload = {
+        "provider": CROSSREF_PROVIDER,
+        "requested_doi": doi_key(requested_doi),
+        "retrieved_doi": doi_key(metadata.doi),
+        "proposal": proposal.model_dump(mode="json"),
+    }
+    canonical_payload = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_payload).hexdigest()
 
 
 def _source_metadata_snapshot(record: SourceRecord) -> dict[str, object]:

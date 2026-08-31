@@ -13,6 +13,7 @@ from litrev.services.doi_metadata import (
     DoiMetadataNotFoundError,
     DoiMetadataRateLimitedError,
     DoiMetadataUnavailableError,
+    InvalidDoiError,
     lookup_crossref_metadata,
 )
 
@@ -66,6 +67,18 @@ def test_crossref_lookup_requests_one_encoded_doi_and_maps_canonical_metadata() 
         ("isbn", "978-0-306-40615-7"),
         ("issn", "2049-3630"),
     ]
+
+
+@pytest.mark.parametrize(
+    "doi",
+    ["", "not-a-doi", "10./missing-prefix", "10.1234/", "10.1234/has space"],
+)
+def test_crossref_lookup_rejects_unusable_dois_before_networking(doi: str) -> None:
+    def unexpected_fetch(_request: Request) -> bytes:
+        raise AssertionError("Invalid DOI input must be rejected before networking")
+
+    with pytest.raises(InvalidDoiError):
+        lookup_crossref_metadata(doi, fetch=unexpected_fetch)
 
 
 def test_crossref_lookup_rejects_a_different_or_unusable_record() -> None:
