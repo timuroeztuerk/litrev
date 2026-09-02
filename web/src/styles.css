@@ -902,6 +902,34 @@ textarea:hover {
   border-color: var(--button-hover);
 }
 
+.isbn-existing-sources > div {
+  flex: 1;
+}
+
+.isbn-existing-sources ul {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 10px 0 0;
+  list-style: none;
+}
+
+.isbn-existing-sources li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.isbn-existing-sources li > span {
+  display: grid;
+  gap: 3px;
+}
+
+.isbn-existing-sources li small {
+  color: var(--muted-ink);
+}
+
 .file-inspection {
   padding: 16px;
   margin-top: 14px;
@@ -1170,6 +1198,77 @@ textarea:hover {
   flex: none;
 }
 
+.reader-saved-notes {
+  margin-top: 36px;
+}
+
+.reader-saved-notes > ul,
+.reader-note-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.reader-saved-notes li,
+.reader-note-list li {
+  border-bottom: 1px solid var(--divider);
+}
+
+.reader-saved-notes li > button {
+  display: grid;
+  width: 100%;
+  gap: 6px;
+  padding: 14px 12px;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+}
+
+.reader-saved-notes li > button:hover {
+  background: var(--hover-background);
+  border-left-color: var(--focus);
+}
+
+.reader-saved-notes li > button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-saved-notes small,
+.reader-note-list small {
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.reader-unresolved {
+  max-width: 720px;
+  margin-top: 14px;
+}
+
+.reader-unresolved > h3 {
+  margin: 28px 0 8px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.reader-note-list li {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+}
+
+.reader-note-list p,
+.reader-note-list q,
+.reader-notes-empty {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
 .reader-document-heading {
   display: flex;
   align-items: flex-end;
@@ -1194,6 +1293,16 @@ textarea:hover {
 .pdf-reader {
   margin-top: 14px;
   border: 1px solid var(--panel-border);
+}
+
+.pdf-reader-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  min-width: 0;
+}
+
+.pdf-reader-main {
+  min-width: 0;
 }
 
 .pdf-reader-toolbar {
@@ -1234,6 +1343,49 @@ textarea:hover {
   opacity: 0.45;
 }
 
+.pdf-highlight-actions {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  gap: 10px;
+  padding: 7px 12px;
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  background: var(--panel-background);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.pdf-highlight-actions:empty {
+  display: none;
+}
+
+.pdf-highlight-actions button,
+.pdf-page-highlights button,
+.pdf-note-panel button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  background: var(--panel-subtle);
+  border: 1px solid var(--strong-border);
+}
+
+.pdf-highlight-actions button:hover:not(:disabled),
+.pdf-page-highlights button:hover:not(:disabled),
+.pdf-note-panel button:hover:not(:disabled) {
+  border-color: var(--focus);
+}
+
+.pdf-highlight-error {
+  padding: 9px 12px;
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  border-bottom: 1px solid currentcolor;
+}
+
 .pdf-page-controls label,
 .pdf-zoom-controls output {
   color: var(--muted-ink);
@@ -1264,18 +1416,125 @@ textarea:hover {
   background: var(--panel-subtle);
 }
 
-.pdf-page-canvas {
-  display: block;
+.pdf-page-surface {
+  --scale-factor: 1;
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+
+  position: relative;
   margin: 0 auto;
+  overflow: hidden;
   background: #fff;
   box-shadow: 0 2px 12px rgb(0 0 0 / 22%);
+}
+
+.pdf-page-canvas {
+  display: block;
+  background: #fff;
+}
+
+.pdf-highlight-layer,
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.pdf-highlight-layer {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.pdf-highlight-rectangle {
+  position: absolute;
+  background: rgb(245 217 10 / 38%);
+  box-shadow: inset 0 0 0 1px rgb(141 91 0 / 22%);
+}
+
+.pdf-text-layer {
+  z-index: 2;
+  overflow: clip;
+  opacity: 1;
+  color-scheme: only light;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: initial;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  forced-color-adjust: none;
+  caret-color: CanvasText;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+
+  --min-font-size: 1;
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
+.pdf-text-layer span[role="img"] {
+  cursor: default;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+
+  --font-height: 0;
+  --rotate: 0deg;
+  --scale-x: 1;
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer::selection,
+.pdf-text-layer ::selection {
+  color: transparent;
+  background: rgb(62 99 221 / 30%);
+}
+
+.pdf-text-layer:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.pdf-text-layer[data-main-rotation="90"] {
+  transform: rotate(90deg) translateY(-100%);
+}
+
+.pdf-text-layer[data-main-rotation="180"] {
+  transform: rotate(180deg) translate(-100%, -100%);
+}
+
+.pdf-text-layer[data-main-rotation="270"] {
+  transform: rotate(270deg) translateX(-100%);
 }
 
 .pdf-rendering-status {
   position: sticky;
   top: 0;
   left: 50%;
-  z-index: 1;
+  z-index: 3;
   display: table;
   padding: 6px 9px;
   margin: 0 auto -30px;
@@ -1284,6 +1543,149 @@ textarea:hover {
   font-size: 10px;
   background: var(--panel-background);
   border: 1px solid var(--panel-border);
+}
+
+.pdf-page-highlights {
+  padding: 14px 16px;
+  background: var(--panel-background);
+  border-top: 1px solid var(--panel-border);
+}
+
+.pdf-page-highlights h3 {
+  margin: 0 0 10px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pdf-page-highlights ul {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.pdf-page-highlights li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 0;
+  border-top: 1px solid var(--divider);
+}
+
+.pdf-page-highlights q {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.pdf-page-highlights li > div {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.pdf-note-panel {
+  min-width: 0;
+  padding: 14px;
+  background: var(--panel-background);
+  border-left: 1px solid var(--panel-border);
+}
+
+.pdf-note-panel-heading,
+.pdf-note-panel-heading > div,
+.pdf-note-list li > div,
+.pdf-note-editor > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdf-note-panel-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.pdf-note-panel-heading h3,
+.pdf-note-editor h4 {
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pdf-note-panel-heading span,
+.pdf-note-editor small,
+.pdf-note-editor label,
+.pdf-notes-empty,
+.pdf-note-panel > p[role="status"] {
+  color: var(--muted-ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.pdf-note-editor {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0 16px;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+
+.pdf-note-editor q,
+.pdf-note-list q {
+  color: var(--muted-ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pdf-note-editor textarea {
+  width: 100%;
+  min-height: 118px;
+  padding: 9px;
+  resize: vertical;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.45;
+  background: var(--input-background);
+  border: 1px solid var(--input-border);
+}
+
+.pdf-note-editor textarea:focus-visible {
+  border-color: var(--focus);
+  outline: 1px solid var(--focus);
+}
+
+.pdf-note-error {
+  padding: 9px;
+  margin: 10px 0 0;
+}
+
+.pdf-notes-empty {
+  margin: 18px 0 0;
+  line-height: 1.5;
+}
+
+.pdf-note-list {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 12px 0 0;
+  list-style: none;
+}
+
+.pdf-note-list li {
+  display: grid;
+  gap: 7px;
+  padding: 12px 0;
+  border-top: 1px solid var(--divider);
+}
+
+.pdf-note-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 
 .document-preview {
@@ -1843,6 +2245,7 @@ textarea:hover {
 .doi-metadata-heading h3,
 .doi-review-intro h3,
 .doi-review-intro h4,
+.metadata-provenance h3,
 .metadata-provenance h4 {
   margin: 0;
   font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -1908,6 +2311,19 @@ textarea:hover {
   color: var(--success);
 }
 
+.doi-metadata-feedback.warning {
+  color: var(--warning);
+}
+
+.isbn-lookup-choice {
+  max-width: 360px;
+  margin-top: 14px;
+}
+
+.isbn-lookup-choice select {
+  width: 100%;
+}
+
 .doi-metadata-review {
   padding-top: 18px;
   margin-top: 18px;
@@ -1916,6 +2332,7 @@ textarea:hover {
 
 .doi-review-intro h4,
 .doi-review-intro h3,
+.metadata-provenance h3,
 .metadata-provenance h4 {
   font-size: 13px;
 }
@@ -2235,6 +2652,15 @@ textarea:hover {
   .import-confirmation button {
     grid-column: 1 / -1;
   }
+
+  .pdf-reader-content {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-note-panel {
+    border-top: 1px solid var(--panel-border);
+    border-left: 0;
+  }
 }
 
 @media (max-width: 800px) {
@@ -2295,6 +2721,11 @@ textarea:hover {
 
   .capture-mode-switch {
     flex-wrap: wrap;
+  }
+
+  .isbn-existing-sources li {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .service-error {

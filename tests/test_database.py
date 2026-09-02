@@ -15,6 +15,7 @@ from litrev.infrastructure.database import (
 from litrev.infrastructure.models import (
     AttachmentRecord,
     CollectionRecord,
+    HighlightRecord,
     NoteRecord,
     SourceCitationKeyRecord,
     SourceIdentifierRecord,
@@ -67,7 +68,7 @@ def test_migration_records_the_current_revision() -> None:
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "20260831_0008"
+    assert revision == "20260901_0011"
 
 
 def test_interrupted_conversion_result_migration_can_be_retried(
@@ -129,7 +130,7 @@ def test_interrupted_conversion_result_migration_can_be_retried(
     } <= columns_after_retry
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0008"
+    assert revision == "20260901_0011"
 
 
 def test_interrupted_source_metadata_migration_can_be_retried(
@@ -193,7 +194,7 @@ def test_interrupted_source_metadata_migration_can_be_retried(
         assert saved.reading_status == ReadingStatus.UNREAD.value
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0008"
+    assert revision == "20260901_0011"
 
 
 def test_interrupted_source_organization_migration_can_be_retried(
@@ -239,7 +240,7 @@ def test_interrupted_source_organization_migration_can_be_retried(
     } <= set(inspect(database.engine).get_table_names())
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0008"
+    assert revision == "20260901_0011"
 
 
 def test_source_identifier_migration_preserves_existing_sources(tmp_path: Path) -> None:
@@ -319,7 +320,7 @@ def test_interrupted_source_identifier_migration_can_be_retried(
     )
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "20260831_0008"
+    assert revision == "20260901_0011"
 
 
 def test_metadata_provenance_migration_preserves_existing_sources(tmp_path: Path) -> None:
@@ -351,8 +352,9 @@ def test_metadata_provenance_migration_preserves_existing_sources(tmp_path: Path
         "source_id",
         "provider",
         "provider_url",
-        "requested_doi",
-        "retrieved_doi",
+        "identifier_type",
+        "requested_identifier",
+        "retrieved_identifier",
         "reviewed_metadata",
         "proposed_metadata",
         "retrieved_at",
@@ -412,7 +414,391 @@ def test_interrupted_metadata_provenance_migration_can_be_retried(
     }
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_generic_metadata_provenance_migration_preserves_crossref_history(
+    tmp_path: Path,
+) -> None:
+    database = Database.from_path(tmp_path / "generic-metadata-provenance.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0008")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO sources (title, doi, created_at, source_type, authors, reading_status)
+            VALUES (
+                'Existing source',
+                '10.1234/existing',
+                '2026-08-31 00:00:00',
+                'paper',
+                '[]',
+                'unread'
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO source_metadata_lookups (
+                source_id,
+                provider,
+                provider_url,
+                requested_doi,
+                retrieved_doi,
+                reviewed_metadata,
+                proposed_metadata,
+                retrieved_at,
+                applied_fields,
+                applied_at
+            ) VALUES (
+                1,
+                'Crossref',
+                'https://api.crossref.org/works/10.1234%2Fexisting',
+                '10.1234/existing',
+                '10.1234/existing',
+                '{"title": "Saved title"}',
+                '{"title": "Crossref title"}',
+                '2026-08-31 01:00:00',
+                '["title"]',
+                '2026-08-31 01:01:00'
+            )
+            """
+        )
+
+    database.migrate()
+
+    columns = {
+        column["name"]: column
+        for column in inspect(database.engine).get_columns("source_metadata_lookups")
+    }
+    assert "requested_doi" not in columns
+    assert "retrieved_doi" not in columns
+    assert columns["identifier_type"]["default"] is None
+    with database.session() as session:
+        lookup = session.query(SourceMetadataLookupRecord).one()
+        assert lookup.provider == "Crossref"
+        assert lookup.identifier_type == "doi"
+        assert lookup.requested_identifier == "10.1234/existing"
+        assert lookup.retrieved_identifier == "10.1234/existing"
+        assert lookup.reviewed_metadata == {"title": "Saved title"}
+        assert lookup.proposed_metadata == {"title": "Crossref title"}
+        assert lookup.applied_fields == ["title"]
+        assert lookup.applied_at is not None
+
+
+def test_interrupted_generic_metadata_provenance_migration_can_be_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = Database.from_path(tmp_path / "interrupted-generic-provenance.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260831_0008")
+
+    original_alter_column = Operations.alter_column
+
+    def interrupt_after_requested_identifier(
+        operations: Operations,
+        table_name: str,
+        column_name: str,
+        **kwargs: object,
+    ) -> None:
+        original_alter_column(operations, table_name, column_name, **kwargs)
+        if kwargs.get("new_column_name") == "requested_identifier":
+            raise RuntimeError("simulated generic-provenance migration interruption")
+
+    with monkeypatch.context() as migration_patch:
+        migration_patch.setattr(Operations, "alter_column", interrupt_after_requested_identifier)
+        with pytest.raises(
+            RuntimeError,
+            match="simulated generic-provenance migration interruption",
+        ):
+            database.migrate()
+
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     assert revision == "20260831_0008"
+
+    database.migrate()
+
+    columns = {
+        column["name"] for column in inspect(database.engine).get_columns("source_metadata_lookups")
+    }
+    assert {"identifier_type", "requested_identifier", "retrieved_identifier"} <= columns
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_page_highlight_migration_preserves_existing_reader_records(tmp_path: Path) -> None:
+    database = Database.from_path(tmp_path / "page-highlights.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260901_0009")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO sources (title, doi, created_at, source_type, authors, reading_status)
+            VALUES ('Existing PDF', NULL, '2026-09-01 00:00:00', 'paper', '[]', 'unread')
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO notes (source_id, body, locator, created_at)
+            VALUES (1, 'Existing note', 'p. 1', '2026-09-01 00:00:00')
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO attachments (
+                source_id,
+                original_filename,
+                managed_path,
+                media_type,
+                byte_size,
+                checksum,
+                detected_format,
+                conversion_status,
+                created_at,
+                updated_at
+            ) VALUES (
+                1,
+                'existing.pdf',
+                'attachments/existing.pdf',
+                'application/pdf',
+                12,
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'pdf',
+                'pending',
+                '2026-09-01 00:00:00',
+                '2026-09-01 00:00:00'
+            )
+            """
+        )
+
+    database.migrate()
+
+    assert "highlights" in inspect(database.engine).get_table_names()
+    with database.session() as session:
+        assert session.query(SourceRecord).one().title == "Existing PDF"
+        assert session.query(NoteRecord).one().body == "Existing note"
+        assert session.query(AttachmentRecord).one().original_filename == "existing.pdf"
+        assert session.query(HighlightRecord).count() == 0
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_interrupted_page_highlight_migration_adds_only_the_missing_index(
+    tmp_path: Path,
+) -> None:
+    database = Database.from_path(tmp_path / "interrupted-page-highlights.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260901_0009")
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE highlights (
+                id INTEGER NOT NULL PRIMARY KEY,
+                attachment_id INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                selected_text TEXT NOT NULL,
+                rectangles JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                CONSTRAINT ck_highlights_page_number_positive CHECK (page_number >= 1),
+                CONSTRAINT ck_highlights_selected_text_length
+                    CHECK (length(selected_text) BETWEEN 1 AND 10000),
+                FOREIGN KEY(attachment_id) REFERENCES attachments (id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    database.migrate()
+
+    assert {
+        tuple(index["column_names"]) for index in inspect(database.engine).get_indexes("highlights")
+    } == {("attachment_id",)}
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_page_highlights_are_attachment_owned_and_use_normalized_coordinates() -> None:
+    database = Database.in_memory()
+    database.migrate()
+
+    with database.session() as session:
+        source = SourceRecord(title="Highlighted source")
+        attachment = AttachmentRecord(
+            source=source,
+            original_filename="paper.pdf",
+            managed_path="attachments/paper.pdf",
+            media_type="application/pdf",
+            byte_size=12,
+            checksum="b" * 64,
+            detected_format="pdf",
+            conversion_status="pending",
+        )
+        attachment.highlights.append(
+            HighlightRecord(
+                page_number=3,
+                selected_text="Persisted passage",
+                rectangles=[{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.04}],
+            )
+        )
+        session.add(source)
+        session.commit()
+        attachment_id = attachment.id
+
+    with database.session() as session:
+        highlight = session.query(HighlightRecord).one()
+        assert highlight.page_number == 3
+        assert highlight.selected_text == "Persisted passage"
+        assert highlight.rectangles == [{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.04}]
+        session.execute(delete(AttachmentRecord).where(AttachmentRecord.id == attachment_id))
+        session.commit()
+
+    with database.session() as session:
+        assert session.scalar(select(HighlightRecord)) is None
+
+
+def test_reader_note_anchor_migration_preserves_legacy_notes(tmp_path: Path) -> None:
+    database = Database.from_path(tmp_path / "reader-note-anchors.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260901_0010")
+        connection.exec_driver_sql(
+            """
+            INSERT INTO sources (title, doi, created_at, source_type, authors, reading_status)
+            VALUES ('Existing source', NULL, '2026-09-01 00:00:00', 'paper', '[]', 'unread')
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO notes (source_id, body, locator, created_at)
+            VALUES (1, 'Legacy note', 'p. 9', '2026-09-01 00:00:00')
+            """
+        )
+
+    database.migrate()
+
+    with database.session() as session:
+        note = session.query(NoteRecord).one()
+        assert note.body == "Legacy note"
+        assert note.locator == "p. 9"
+        assert note.attachment_id is None
+        assert note.page_number is None
+        assert note.highlight_id is None
+    indexes = {
+        tuple(index["column_names"]) for index in inspect(database.engine).get_indexes("notes")
+    }
+    assert {("source_id",), ("attachment_id",), ("highlight_id",)} <= indexes
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_interrupted_reader_note_anchor_migration_adds_missing_fields(tmp_path: Path) -> None:
+    database = Database.from_path(tmp_path / "interrupted-reader-note-anchors.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260901_0010")
+        connection.exec_driver_sql(
+            "ALTER TABLE notes ADD COLUMN attachment_id INTEGER "
+            "REFERENCES attachments(id) ON DELETE RESTRICT"
+        )
+
+    database.migrate()
+
+    columns = {column["name"] for column in inspect(database.engine).get_columns("notes")}
+    assert {"attachment_id", "page_number", "highlight_id"} <= columns
+    with database.engine.connect() as connection:
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert revision == "20260901_0011"
+
+
+def test_reader_note_anchor_migration_repairs_columns_left_without_foreign_keys(
+    tmp_path: Path,
+) -> None:
+    database = Database.from_path(tmp_path / "reader-note-columns-without-foreign-keys.sqlite3")
+    configuration = _migration_config()
+    with database.engine.begin() as connection:
+        configuration.attributes["connection"] = connection
+        command.upgrade(configuration, "20260901_0010")
+        connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN attachment_id INTEGER")
+        connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN page_number INTEGER")
+        connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN highlight_id INTEGER")
+
+    with database.session() as session:
+        source = SourceRecord(title="Preserved partial migration")
+        attachment = AttachmentRecord(
+            source=source,
+            original_filename="preserved.pdf",
+            managed_path="attachments/aa/" + "a" * 64,
+            media_type="application/pdf",
+            byte_size=12,
+            checksum="a" * 64,
+            detected_format="pdf",
+            conversion_status="pending",
+        )
+        highlight = HighlightRecord(
+            attachment=attachment,
+            page_number=3,
+            selected_text="Preserved quote",
+            rectangles=[{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.04}],
+        )
+        source.notes.append(
+            NoteRecord(
+                attachment=attachment,
+                page_number=3,
+                highlight=highlight,
+                body="Preserved note",
+                locator="p. 3",
+            )
+        )
+        session.add(source)
+        session.commit()
+
+    database.migrate()
+    database.migrate()
+
+    with database.session() as session:
+        note = session.query(NoteRecord).one()
+        assert note.body == "Preserved note"
+        assert note.locator == "p. 3"
+        assert note.attachment.original_filename == "preserved.pdf"
+        assert note.highlight.selected_text == "Preserved quote"
+        attachment_id = note.attachment_id
+        highlight_id = note.highlight_id
+    with database.engine.connect() as connection:
+        all_foreign_keys = {
+            (row["from"], row["table"], row["to"], row["on_delete"])
+            for row in connection.exec_driver_sql("PRAGMA foreign_key_list(notes)").mappings()
+        }
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert all_foreign_keys == {
+        ("source_id", "sources", "id", "NO ACTION"),
+        ("attachment_id", "attachments", "id", "RESTRICT"),
+        ("highlight_id", "highlights", "id", "SET NULL"),
+    }
+    assert revision == "20260901_0011"
+
+    with database.session() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(delete(AttachmentRecord).where(AttachmentRecord.id == attachment_id))
+            session.commit()
+        session.rollback()
+        session.execute(delete(HighlightRecord).where(HighlightRecord.id == highlight_id))
+        session.commit()
+    with database.session() as session:
+        note = session.query(NoteRecord).one()
+        assert note.body == "Preserved note"
+        assert note.highlight_id is None
 
 
 def test_source_organization_migration_rejects_an_incompatible_partial_schema(
@@ -520,7 +906,7 @@ def test_legacy_database_is_adopted_without_losing_records(tmp_path: Path) -> No
             session.commit()
     with database.engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "20260831_0008"
+        assert revision == "20260901_0011"
     assert AttachmentRecord.__tablename__ in inspect(database.engine).get_table_names()
 
 
@@ -620,8 +1006,9 @@ def test_metadata_lookup_provenance_is_source_owned() -> None:
                 SourceMetadataLookupRecord(
                     provider="Crossref",
                     provider_url="https://api.crossref.org/works/10.1234%2Fexample",
-                    requested_doi="10.1234/example",
-                    retrieved_doi="10.1234/example",
+                    identifier_type="doi",
+                    requested_identifier="10.1234/example",
+                    retrieved_identifier="10.1234/example",
                     reviewed_metadata={"title": "Looked-up source"},
                     proposed_metadata={"title": "Provider title"},
                     applied_fields=["title"],

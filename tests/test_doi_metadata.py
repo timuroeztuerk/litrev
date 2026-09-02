@@ -51,17 +51,21 @@ def test_crossref_lookup_requests_one_encoded_doi_and_maps_canonical_metadata() 
     assert requests[0].full_url == "https://api.crossref.org/works/10.1234%2FExample"
     assert requests[0].get_header("Accept") == "application/json"
     assert requests[0].get_header("User-agent", "").startswith("Litrev/")
-    assert metadata.doi == "10.1234/Example"
-    assert metadata.source_type is SourceType.PAPER
-    assert metadata.title == "Über evidence"
-    assert metadata.authors == ["Ada Lovelace", "Research Collective"]
-    assert metadata.publication_year == 2024
-    assert metadata.venue == "Journal Ω"
-    assert metadata.url == "https://doi.org/10.1234/example"
-    assert metadata.abstract == "A useful abstract."
-    assert metadata.language == "en"
+    assert metadata.provider == "Crossref"
+    assert metadata.provider_url == "https://api.crossref.org/works/10.1234%2FExample"
+    assert metadata.identifier_type == "doi"
+    assert metadata.retrieved_identifier == "10.1234/Example"
+    assert metadata.proposal.source_type is SourceType.PAPER
+    assert metadata.proposal.title == "Über evidence"
+    assert metadata.proposal.authors == ["Ada Lovelace", "Research Collective"]
+    assert metadata.proposal.publication_year == 2024
+    assert metadata.proposal.venue == "Journal Ω"
+    assert metadata.proposal.url == "https://doi.org/10.1234/example"
+    assert metadata.proposal.abstract == "A useful abstract."
+    assert metadata.proposal.language == "en"
     assert [
-        (identifier.identifier_type, identifier.value) for identifier in metadata.identifiers or []
+        (identifier.identifier_type, identifier.value)
+        for identifier in metadata.proposal.identifiers or []
     ] == [
         ("isbn", "978-0-306-40615-7"),
         ("issn", "2049-3630"),
@@ -128,4 +132,17 @@ def test_crossref_http_failures_are_specific(
     monkeypatch.setattr(doi_metadata, "urlopen", fail_request)
 
     with pytest.raises(error_type):
+        lookup_crossref_metadata("10.1234/example")
+
+
+def test_crossref_timeout_is_reported_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def time_out(_request: Request, *, timeout: int) -> bytes:
+        assert timeout == 10
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(doi_metadata, "urlopen", time_out)
+
+    with pytest.raises(DoiMetadataUnavailableError, match="could not be reached"):
         lookup_crossref_metadata("10.1234/example")

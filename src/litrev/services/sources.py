@@ -49,8 +49,8 @@ def remove_source(database: Database, source_id: int) -> None:
         )
 
         try:
-            session.execute(delete(AttachmentRecord).where(AttachmentRecord.source_id == source_id))
             session.execute(delete(NoteRecord).where(NoteRecord.source_id == source_id))
+            session.execute(delete(AttachmentRecord).where(AttachmentRecord.source_id == source_id))
             session.execute(delete(SourceRecord).where(SourceRecord.id == source_id))
             session.commit()
         except Exception as error:

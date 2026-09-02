@@ -1,7 +1,7 @@
 export type SourceType = "paper" | "book" | "other";
 export type ReadingStatus = "unread" | "reading" | "read";
 export type BibliographyFormat = "bibtex" | "ris" | "csl-json";
-export type DoiMetadataField =
+export type MetadataField =
   | "source_type"
   | "title"
   | "authors"
@@ -91,25 +91,76 @@ export interface ReaderDocument {
   source_title: string;
   original_filename: string;
   byte_size: number;
+  attachment_availability: AttachmentAvailability;
+  reader_notes: ReaderNote[];
+}
+
+export type AttachmentAvailability =
+  | "available"
+  | "missing_or_changed"
+  | "storage_unavailable";
+
+export interface HighlightRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Highlight {
+  id: number;
+  attachment_id: number;
+  source_id: number;
+  page_number: number;
+  selected_text: string;
+  rectangles: HighlightRectangle[];
+  created_at: string;
+}
+
+export interface HighlightCreate {
+  page_number: number;
+  selected_text: string;
+  rectangles: HighlightRectangle[];
+}
+
+export interface ReaderNote {
+  id: number;
+  source_id: number;
+  source_title: string;
+  attachment_id: number;
+  original_filename: string;
+  page_number: number;
+  body: string;
+  highlight: Highlight | null;
+  attachment_availability: AttachmentAvailability;
+  created_at: string;
+}
+
+export interface ReaderNoteCreate {
+  page_number: number;
+  body: string;
+  highlight_id?: number;
+  new_highlight?: Pick<HighlightCreate, "selected_text" | "rectangles">;
 }
 
 export interface SourceDetail extends Source {
   attachments: Attachment[];
-  metadata_provenance: DoiMetadataProvenance[];
+  metadata_provenance: MetadataProvenance[];
 }
 
-export interface DoiMetadataProvenance {
+export interface MetadataProvenance {
   lookup_id: number;
   provider: string;
   provider_url: string;
-  requested_doi: string;
-  retrieved_doi: string;
+  identifier_type: "doi" | "isbn";
+  requested_identifier: string;
+  retrieved_identifier: string;
   retrieved_at: string;
-  applied_fields: DoiMetadataField[];
+  applied_fields: MetadataField[];
   applied_at: string;
 }
 
-export interface DoiMetadataProposal {
+export interface MetadataProposal {
   source_type: SourceType | null;
   title: string | null;
   authors: string[] | null;
@@ -121,16 +172,17 @@ export interface DoiMetadataProposal {
   identifiers: SourceIdentifier[] | null;
 }
 
-export interface DoiMetadataLookup {
+export interface MetadataLookup {
   id: number;
   provider: string;
   provider_url: string;
-  requested_doi: string;
-  retrieved_doi: string;
+  identifier_type: "doi" | "isbn";
+  requested_identifier: string;
+  retrieved_identifier: string;
   retrieved_at: string;
-  proposal: DoiMetadataProposal;
-  available_fields: DoiMetadataField[];
-  conflicting_fields: DoiMetadataField[];
+  proposal: MetadataProposal;
+  available_fields: MetadataField[];
+  conflicting_fields: MetadataField[];
 }
 
 export interface ExistingDoiSource {
@@ -154,14 +206,49 @@ export type DoiMetadataPreview =
       retrieved_doi: string;
       retrieved_at: string;
       proposal_fingerprint: string;
-      proposal: DoiMetadataProposal;
-      available_fields: DoiMetadataField[];
+      proposal: MetadataProposal;
+      available_fields: MetadataField[];
     };
 
 export interface DoiSourceCreate {
   doi: string;
   proposal_fingerprint: string;
-  fields: DoiMetadataField[];
+  fields: MetadataField[];
+}
+
+export interface ExistingIsbnSource {
+  id: number;
+  source_type: SourceType;
+  title: string;
+  isbn_values: string[];
+}
+
+export type IsbnMetadataPreview =
+  | {
+      kind: "existing_sources";
+      input_isbn: string;
+      normalized_isbn: string;
+      canonical_isbn13: string;
+      existing_sources: ExistingIsbnSource[];
+    }
+  | {
+      kind: "proposal";
+      input_isbn: string;
+      normalized_isbn: string;
+      canonical_isbn13: string;
+      provider: string;
+      provider_url: string;
+      retrieved_isbn: string;
+      retrieved_at: string;
+      proposal_fingerprint: string;
+      proposal: MetadataProposal;
+      available_fields: MetadataField[];
+    };
+
+export interface IsbnSourceCreate {
+  isbn: string;
+  proposal_fingerprint: string;
+  fields: MetadataField[];
 }
 
 export interface ImportedDocument {
@@ -261,6 +348,54 @@ export function getPdfContentUrl(attachmentId: number): string {
   return `${apiBase}/api/attachments/${attachmentId}/content`;
 }
 
+export function getHighlights(
+  attachmentId: number,
+  signal?: AbortSignal,
+): Promise<Highlight[]> {
+  return request<Highlight[]>(`/api/attachments/${attachmentId}/highlights`, { signal });
+}
+
+export function createHighlight(
+  attachmentId: number,
+  highlight: HighlightCreate,
+): Promise<Highlight> {
+  return request<Highlight>(`/api/attachments/${attachmentId}/highlights`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(highlight),
+  });
+}
+
+export function deleteHighlight(highlightId: number): Promise<void> {
+  return request<void>(`/api/highlights/${highlightId}`, { method: "DELETE" });
+}
+
+export function getReaderNotes(
+  attachmentId: number,
+  signal?: AbortSignal,
+): Promise<ReaderNote[]> {
+  return request<ReaderNote[]>(`/api/attachments/${attachmentId}/notes`, { signal });
+}
+
+export function createReaderNote(
+  attachmentId: number,
+  note: ReaderNoteCreate,
+): Promise<ReaderNote> {
+  return request<ReaderNote>(`/api/attachments/${attachmentId}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(note),
+  });
+}
+
+export function updateReaderNote(noteId: number, body: string): Promise<ReaderNote> {
+  return request<ReaderNote>(`/api/notes/${noteId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+}
+
 export function updateSource(sourceId: number, source: SourceUpdate): Promise<SourceDetail> {
   return request<SourceDetail>(`/api/sources/${sourceId}`, {
     method: "PUT",
@@ -269,8 +404,8 @@ export function updateSource(sourceId: number, source: SourceUpdate): Promise<So
   });
 }
 
-export function createDoiMetadataLookup(sourceId: number): Promise<DoiMetadataLookup> {
-  return request<DoiMetadataLookup>(`/api/sources/${sourceId}/doi-metadata-lookups`, {
+export function createDoiMetadataLookup(sourceId: number): Promise<MetadataLookup> {
+  return request<MetadataLookup>(`/api/sources/${sourceId}/doi-metadata-lookups`, {
     method: "POST",
   });
 }
@@ -291,13 +426,58 @@ export function createSourceFromDoi(creation: DoiSourceCreate): Promise<SourceDe
   });
 }
 
+export function createIsbnMetadataPreview(
+  isbn: string,
+  lookupIfLocalMatch = false,
+): Promise<IsbnMetadataPreview> {
+  return request<IsbnMetadataPreview>("/api/isbn-metadata-previews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isbn, lookup_if_local_match: lookupIfLocalMatch }),
+  });
+}
+
+export function createIsbnMetadataLookup(
+  sourceId: number,
+  isbn: string,
+): Promise<MetadataLookup> {
+  return request<MetadataLookup>(`/api/sources/${sourceId}/isbn-metadata-lookups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isbn }),
+  });
+}
+
+export function createSourceFromIsbn(creation: IsbnSourceCreate): Promise<SourceDetail> {
+  return request<SourceDetail>("/api/sources/from-isbn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(creation),
+  });
+}
+
 export function applyDoiMetadataLookup(
   sourceId: number,
   lookupId: number,
-  fields: DoiMetadataField[],
+  fields: MetadataField[],
 ): Promise<SourceDetail> {
   return request<SourceDetail>(
     `/api/sources/${sourceId}/doi-metadata-lookups/${lookupId}/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields }),
+    },
+  );
+}
+
+export function applyIsbnMetadataLookup(
+  sourceId: number,
+  lookupId: number,
+  fields: MetadataField[],
+): Promise<SourceDetail> {
+  return request<SourceDetail>(
+    `/api/sources/${sourceId}/isbn-metadata-lookups/${lookupId}/apply`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

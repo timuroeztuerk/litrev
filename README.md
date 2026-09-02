@@ -15,33 +15,38 @@ be traced to its source and, where possible, an exact passage.
 - **Recoverable:** libraries must be safe to migrate, back up, and inspect.
 - **AI optional:** core library workflows must remain useful without AI.
 
-## Current state
+## Product status
 
-The working vertical slice supports:
+### Available now
 
-- manual capture of books and papers;
-- creating a source from a DOI after reviewing selected Crossref metadata;
-- viewing and editing bibliographic metadata, standard identifiers, and reading status;
-- finding saved sources by metadata, source type, reading status, year, or date added;
-- organizing sources with reusable tags and collections;
-- importing source metadata, identifiers, and record keys from BibTeX, RIS, and CSL JSON
-  bibliographies;
-- exporting the full library as UTF-8 BibTeX, RIS, or CSL JSON with preserved identifiers and
-  stable record keys;
-- explicitly looking up DOI metadata from Crossref, reviewing conflicts, applying selected fields,
-  and retaining provenance;
-- durable, deduplicated local document imports;
-- structured Markdown extraction with explicit failure states and retries;
-- reopening a source to inspect its attachments and extracted text;
-- opening stored PDFs in a dedicated, single-page Reader with page and zoom controls;
-- confirmed removal of failed attachments with safeguarded file cleanup; and
-- explicit source deletion with relationship and managed-file cleanup safeguards.
+- **Source capture:** create books and papers manually, from a reviewed Crossref DOI record, or
+  from a reviewed Open Library ISBN catalog record.
+- **Metadata enrichment:** edit saved metadata directly or explicitly look up a saved DOI or book
+  ISBN, compare current and proposed values, select fields, and retain applied provenance.
+- **Library management:** search, sort, and filter saved sources; organize them with reusable tags
+  and collections; and remove sources through a confirmed cleanup workflow.
+- **Bibliography interoperability:** import BibTeX, RIS, and CSL JSON, and export the complete
+  library in the same formats while preserving supported identifiers and stable record keys.
+- **Local documents:** import distinct files durably, detect duplicate content, extract structured
+  Markdown, inspect explicit conversion failures, retry extraction, and safely remove failed
+  attachments.
+- **PDF reading and notes:** open a managed PDF in the dedicated Reader, navigate one page at a
+  time, save or delete persistent page highlights, and create or edit manual page-aware notes.
+  Reading, highlighting, and notes do not require extraction or a network connection.
+- **Recovery foundations:** use forward-only database migrations and guarded database/file
+  transactions for imports, attachment cleanup, metadata application, and source deletion.
 
-Persistent PDF highlights and notes, research maps, distributable packaging, and AI assistance are
-not implemented yet. The useful-library milestone is complete, DOI-first capture remains in
-progress, and the read-only foundation of the [Reader milestone](docs/ROADMAP.md#3-reader-locators-and-annotations)
-is now available. [ISBN validation and metadata lookup](docs/ROADMAP.md#22-isbn-validation-and-metadata-lookup)
-also remains planned.
+### Current roadmap focus
+
+The Reader's manual reading workflow is complete through page-aware notes and saved-locator reopen.
+The next item is proving annotations across their remaining real boundaries.
+See [Reader, locators, and annotations](docs/ROADMAP.md#3-reader-locators-and-annotations).
+
+### Not implemented yet
+
+The synthesis workbench, research maps, full-text passage search, distributable desktop packaging,
+in-app backup and restore, and optional AI assistance remain planned. Litrev is still an early
+prototype rather than a dependable reference manager.
 
 ## Settings
 
@@ -80,8 +85,15 @@ Apache 2.0 license. FastAPI resolves a PDF by its attachment identifier, verifie
 and serves it with byte-range support; the React interface renders one page at a time. PDF.js is
 separate from Anydoc, and opening a PDF neither runs extraction nor changes the managed original.
 
-This first slice provides previous and next page navigation, direct page entry, zoom, and
-fit-to-width. It does not yet add a selectable text layer, persistent highlights, or reader notes.
+The Reader provides previous and next page navigation, direct page entry, zoom, fit-to-width, and a
+PDF.js text layer when the page contains selectable text. An explicit **Highlight** action stores
+the exact selected text and normalized page rectangles in the local database; saved highlights
+remain aligned across zoom changes and reopen as non-destructive overlays. Image-only pages remain
+readable but explain that highlighting is unavailable, and Litrev does not start OCR automatically.
+The compact note panel creates and edits shared Litrev notes for a page or saved highlight. A new
+selection and its first note are saved atomically. Saved note locators reopen the owning PDF and
+page; if the managed file is missing or changed, Litrev keeps the note and locator visible instead
+of discarding the research record.
 
 ## Run locally
 
@@ -156,10 +168,25 @@ managed originals and extracted text. Litrev stages managed files before committ
 deletion so a database failure can restore them; an incomplete post-commit cleanup is reported
 instead of presenting the source as recoverable.
 
+### Explicit metadata networking
+
 DOI metadata lookup is opt-in. Clicking **Look up DOI metadata** sends the source DOI to Crossref;
 opening or editing a source does not make that network request. Litrev shows provider values beside
 saved values, leaves conflicts for the user to select, applies only selected fields, and records
 the provider link and applied fields as local provenance.
+
+ISBN catalog lookup is also opt-in. **Look up ISBN** validates the ISBN locally and checks for
+canonical ISBN-10/ISBN-13 matches already in the library before contacting Open Library. A user can
+open those local matches or explicitly continue to the catalog. Litrev describes Open Library data
+as a catalog match—not proof of official ISBN assignment—and creates nothing until the user reviews
+the proposal and chooses **Add book**. Confirmation re-fetches the record, saves the required ISBN
+and title plus selected fields, and records Open Library provenance in the same transaction.
+
+For a saved book, **Look up ISBN metadata** sends only the explicitly selected saved ISBN to Open
+Library. Litrev shows saved and proposed values together, leaves conflicts unselected, and changes
+nothing until **Apply selected fields** is chosen. Applying re-fetches the catalog record; changed
+provider data returns a fresh review, while a successful apply records the provider link and exact
+fields as local provenance.
 
 When developing migrations, use an isolated library and never run Alembic commands against the
 real one.
@@ -179,25 +206,47 @@ recover files or records deleted before that backup was made.
 
 ## Local API
 
+### Sources and library interchange
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Report local stack health and versions |
 | `GET` | `/api/sources` | List sources |
 | `GET` | `/api/sources/{source_id}` | Read a source and its attachment states |
 | `POST` | `/api/sources` | Create a manual book or paper |
-| `POST` | `/api/sources/from-doi` | Create a source from reviewed Crossref metadata |
 | `PUT` | `/api/sources/{source_id}` | Replace a source's validated metadata and organization |
 | `DELETE` | `/api/sources/{source_id}` | Remove a source, its relationships, and managed files |
-| `POST` | `/api/doi-metadata-previews` | Preview Crossref metadata for a DOI without saving it |
-| `POST` | `/api/sources/{source_id}/doi-metadata-lookups` | Retrieve a reviewable Crossref proposal for the saved DOI |
-| `POST` | `/api/sources/{source_id}/doi-metadata-lookups/{lookup_id}/apply` | Apply explicitly selected proposal fields and save provenance |
 | `POST` | `/api/bibliography-imports` | Import source metadata from BibTeX, RIS, or CSL JSON |
 | `GET` | `/api/bibliography-exports/{format}` | Download the full library as `bibtex`, `ris`, or `csl-json` |
+
+### External metadata
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/sources/from-doi` | Create a source from reviewed Crossref metadata |
+| `POST` | `/api/sources/from-isbn` | Create a book from reviewed Open Library catalog metadata |
+| `POST` | `/api/doi-metadata-previews` | Preview Crossref metadata for a DOI without saving it |
+| `POST` | `/api/isbn-metadata-previews` | Validate an ISBN, check local matches, and explicitly preview Open Library metadata without saving it |
+| `POST` | `/api/sources/{source_id}/doi-metadata-lookups` | Retrieve a reviewable Crossref proposal for the saved DOI |
+| `POST` | `/api/sources/{source_id}/doi-metadata-lookups/{lookup_id}/apply` | Apply explicitly selected proposal fields and save provenance |
+| `POST` | `/api/sources/{source_id}/isbn-metadata-lookups` | Retrieve a reviewable Open Library proposal for one saved ISBN |
+| `POST` | `/api/sources/{source_id}/isbn-metadata-lookups/{lookup_id}/apply` | Revalidate and apply selected catalog fields with provenance |
+
+### Documents and Reader
+
+| Method | Path | Purpose |
+| --- | --- | --- |
 | `POST` | `/api/imports` | Save a source and original document |
 | `POST` | `/api/attachments/{attachment_id}/convert` | Extract or retry Markdown |
 | `GET` | `/api/attachments/{attachment_id}/extracted-text` | Read persisted Markdown |
 | `GET` | `/api/reader/documents` | List managed PDFs available to the local Reader |
 | `GET` | `/api/attachments/{attachment_id}/content` | Stream a verified managed PDF to the Reader |
+| `GET` | `/api/attachments/{attachment_id}/highlights` | List persistent page-aware highlights for a PDF |
+| `POST` | `/api/attachments/{attachment_id}/highlights` | Save reviewed text and normalized page rectangles as a highlight |
+| `DELETE` | `/api/highlights/{highlight_id}` | Explicitly remove one saved highlight |
+| `GET` | `/api/attachments/{attachment_id}/notes` | List page-aware shared notes for a PDF |
+| `POST` | `/api/attachments/{attachment_id}/notes` | Save a manual page note, optionally with an existing or new highlight |
+| `PUT` | `/api/notes/{note_id}` | Edit the body of a shared Reader note |
 | `DELETE` | `/api/attachments/{attachment_id}` | Remove a failed attachment and its files |
 
 ## Verification
@@ -220,6 +269,8 @@ the user specifically requests it.
 ## Project guidance
 
 - [Roadmap](docs/ROADMAP.md) defines the milestone order and acceptance criteria.
+- [Network page roadmap](docs/roadmap_network.md) expands the citation and relationship work in
+  milestone 5.
 - [Agent instructions](AGENTS.md) define architecture, safety rules, and the definition of done.
 - [Opt-in audit backlog](TODO.md) is consulted only when the user explicitly asks to review or work
   from `TODO.md`. Agents must otherwise ignore it when choosing or scoping work.

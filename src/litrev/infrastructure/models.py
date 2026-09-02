@@ -142,8 +142,9 @@ class SourceMetadataLookupRecord(Base):
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id", ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(50))
     provider_url: Mapped[str] = mapped_column(String(2048))
-    requested_doi: Mapped[str] = mapped_column(String(255))
-    retrieved_doi: Mapped[str] = mapped_column(String(255))
+    identifier_type: Mapped[str] = mapped_column(String(50))
+    requested_identifier: Mapped[str] = mapped_column(String(255))
+    retrieved_identifier: Mapped[str] = mapped_column(String(255))
     reviewed_metadata: Mapped[dict[str, object]] = mapped_column(JSON)
     proposed_metadata: Mapped[dict[str, object]] = mapped_column(JSON)
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
@@ -190,9 +191,18 @@ class NoteRecord(Base):
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     body: Mapped[str] = mapped_column(Text)
     locator: Mapped[str | None] = mapped_column(String(100))
+    attachment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("attachments.id", ondelete="RESTRICT"), index=True
+    )
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    highlight_id: Mapped[int | None] = mapped_column(
+        ForeignKey("highlights.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     source: Mapped[SourceRecord] = relationship(back_populates="notes")
+    attachment: Mapped[AttachmentRecord | None] = relationship(back_populates="notes")
+    highlight: Mapped[HighlightRecord | None] = relationship(back_populates="notes")
 
 
 class AttachmentRecord(Base):
@@ -227,3 +237,35 @@ class AttachmentRecord(Base):
     )
 
     source: Mapped[SourceRecord] = relationship(back_populates="attachments")
+    highlights: Mapped[list[HighlightRecord]] = relationship(
+        back_populates="attachment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    notes: Mapped[list[NoteRecord]] = relationship(back_populates="attachment")
+
+
+class HighlightRecord(Base):
+    __tablename__ = "highlights"
+    __table_args__ = (
+        CheckConstraint("page_number >= 1", name="ck_highlights_page_number_positive"),
+        CheckConstraint(
+            "length(selected_text) BETWEEN 1 AND 10000",
+            name="ck_highlights_selected_text_length",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(
+        ForeignKey("attachments.id", ondelete="CASCADE"), index=True
+    )
+    page_number: Mapped[int] = mapped_column(Integer)
+    selected_text: Mapped[str] = mapped_column(Text)
+    rectangles: Mapped[list[dict[str, float]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+    attachment: Mapped[AttachmentRecord] = relationship(back_populates="highlights")
+    notes: Mapped[list[NoteRecord]] = relationship(
+        back_populates="highlight",
+        passive_deletes=True,
+    )

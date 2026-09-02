@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
@@ -10,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from litrev.domain.sources import SourceType
 from litrev.services.bibliographies import doi_key, normalize_imported_doi
+from litrev.services.metadata import MetadataIdentifier, MetadataProposal, RetrievedMetadata
 
 CROSSREF_PROVIDER = "Crossref"
 CROSSREF_API_ROOT = "https://api.crossref.org/works"
@@ -47,26 +47,6 @@ class DoiMetadataMismatchError(DoiMetadataError):
     pass
 
 
-@dataclass(frozen=True)
-class DoiMetadataIdentifier:
-    identifier_type: str
-    value: str
-
-
-@dataclass(frozen=True)
-class DoiMetadata:
-    doi: str
-    source_type: SourceType | None
-    title: str | None
-    authors: list[str] | None
-    publication_year: int | None
-    venue: str | None
-    url: str | None
-    abstract: str | None
-    language: str | None
-    identifiers: list[DoiMetadataIdentifier] | None
-
-
 CrossrefFetch = Callable[[Request], bytes]
 
 
@@ -95,7 +75,7 @@ def lookup_crossref_metadata(
     doi: str,
     *,
     fetch: CrossrefFetch | None = None,
-) -> DoiMetadata:
+) -> RetrievedMetadata:
     requested_doi = normalize_doi_for_lookup(doi)
     provider_url = crossref_record_url(requested_doi)
     request = Request(
@@ -107,7 +87,7 @@ def lookup_crossref_metadata(
     )
     content = (fetch or _fetch_crossref)(request)
     metadata = _parse_crossref_response(content)
-    if doi_key(metadata.doi) != doi_key(requested_doi):
+    if doi_key(metadata.retrieved_identifier) != doi_key(requested_doi):
         raise DoiMetadataMismatchError(
             "Crossref returned metadata for a different DOI; nothing was saved."
         )
@@ -145,7 +125,7 @@ def _fetch_crossref(request: Request) -> bytes:
     return content
 
 
-def _parse_crossref_response(content: bytes) -> DoiMetadata:
+def _parse_crossref_response(content: bytes) -> RetrievedMetadata:
     try:
         payload = json.loads(content)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -185,17 +165,22 @@ def _parse_crossref_response(content: bytes) -> DoiMetadata:
     ):
         raise DoiMetadataMalformedError("Crossref returned no usable metadata for this DOI.")
 
-    return DoiMetadata(
-        doi=doi,
-        source_type=source_type,
-        title=title,
-        authors=authors,
-        publication_year=publication_year,
-        venue=venue,
-        url=url,
-        abstract=abstract,
-        language=language,
-        identifiers=identifiers,
+    return RetrievedMetadata(
+        provider=CROSSREF_PROVIDER,
+        provider_url=crossref_record_url(doi),
+        identifier_type="doi",
+        retrieved_identifier=doi,
+        proposal=MetadataProposal(
+            source_type=source_type,
+            title=title,
+            authors=authors,
+            publication_year=publication_year,
+            venue=venue,
+            url=url,
+            abstract=abstract,
+            language=language,
+            identifiers=identifiers,
+        ),
     )
 
 
@@ -338,8 +323,8 @@ def _abstract(value: object) -> str | None:
     return cleaned
 
 
-def _identifiers(message: Mapping[str, object]) -> list[DoiMetadataIdentifier] | None:
-    identifiers: dict[tuple[str, str], DoiMetadataIdentifier] = {}
+def _identifiers(message: Mapping[str, object]) -> list[MetadataIdentifier] | None:
+    identifiers: dict[tuple[str, str], MetadataIdentifier] = {}
     for field, identifier_type in (("ISBN", "isbn"), ("ISSN", "issn")):
         value = message.get(field)
         if value is None:
@@ -354,7 +339,7 @@ def _identifiers(message: Mapping[str, object]) -> list[DoiMetadataIdentifier] |
                 raise DoiMetadataMalformedError(f"Crossref returned an oversized {field} value.")
             identifiers.setdefault(
                 (identifier_type, cleaned.casefold()),
-                DoiMetadataIdentifier(identifier_type=identifier_type, value=cleaned),
+                MetadataIdentifier(identifier_type=identifier_type, value=cleaned),
             )
     if len(identifiers) > 50:
         raise DoiMetadataMalformedError("Crossref returned too many identifiers.")

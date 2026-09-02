@@ -11,14 +11,42 @@ traceable to its origin.
 - Each change should deliver one observable workflow and its important failure states.
 - Automated tests, static checks, and builds are the default acceptance evidence; interactive
   browser QA is performed only when the user specifically requests it.
-- `[ ]` means planned; `[-]` means intentionally deferred.
+- `[x]` means complete; `[ ]` means planned; `[-]` means intentionally deferred.
 
-The current implementation slice is the read-only foundation of **Milestone 3: Reader, locators,
-and annotations**, brought forward by explicit product priority. The unfinished DOI-first capture
-work and Milestone 2.2 remain planned; highlights and notes do not begin until the Reader foundation
-is dependable.
+## Status at a glance
 
-## Completed baseline: foundation and durable ingestion
+| Milestone | Status | Summary |
+| --- | --- | --- |
+| 0–1. Foundation and ingestion | Complete | Local storage, migrations, guarded document import, extraction, and cleanup |
+| 2. Useful library and metadata | Complete | Editing, discovery, organization, bibliography interchange, and explicit provider enrichment |
+| 2.1. DOI-first capture | Complete | Review Crossref metadata before creating a source |
+| 2.2. ISBN workflows | Complete | ISBN validation, Open Library capture, and enrichment of saved books |
+| 3. Reader, locators, and annotations | In progress | Local PDF reading, persistent highlights, and page-aware Reader notes are complete; boundary proof is next |
+| 4. Notes and synthesis | Planned | Source-linked notes, claims, evidence, projects, and outlines |
+| 5. Relationships and research map | Planned | Persisted typed relationships with inspectable provenance |
+| 6. Full-text search and retrieval | Planned | Explainable retrieval across sources, documents, notes, and annotations |
+| 7. Packaging and resilience | Planned | Installable builds, lifecycle hardening, backup, restore, and upgrade testing |
+| 8. Optional AI assistance | Planned | Evidence-linked assistance with a fully functional no-AI mode |
+
+### Recently completed
+
+- DOI-first and ISBN-first source capture now create a source only after explicit provider review.
+- Saved books can use one explicitly chosen ISBN for Open Library conflict review and selective
+  enrichment with provenance.
+- The read-only Reader can list managed PDFs, stream a verified local file, and navigate one page
+  at a time with bounded page and zoom controls.
+- PDF.js text selection now creates explicit, persistent highlights with normalized page geometry;
+  saved overlays survive reopen and zoom changes without modifying the managed PDF.
+
+### Current priority
+
+Continue **Milestone 3**. Section 3.3 is complete; the first open item is **Create manual Litrev
+notes from the Reader** in section 3.4. Note locators must preserve source and page identity without
+coupling notes to transient Reader display state.
+
+## 0–1. Foundation and durable ingestion
+
+**Status:** Complete.
 
 Milestones 0 and 1 established the development stack and the first dependable vertical slice:
 
@@ -46,6 +74,8 @@ attachments from deletion.
 
 Outcome: a growing research library can be found, corrected, organized, imported, and exported.
 
+**Status:** Complete.
+
 Manual title-and-type capture already exists.
 
 - [x] Add authors, year, venue, DOI, URL, abstract, language, and reading status.
@@ -57,31 +87,22 @@ Manual title-and-type capture already exists.
 - [x] Export standard bibliographic formats without losing identifiers.
 - [x] Add opt-in DOI metadata lookup with provenance and conflict review.
 
-Metadata is stored locally and can be edited from the source detail screen. Empty optional values
-are normalized consistently, URLs must use HTTP or HTTPS, and duplicate DOI changes are rejected
-without partially changing the source.
+Delivered behavior:
 
-Library discovery now provides case-insensitive search across title, authors, venue, and DOI;
-sorting by title, publication year, or date added; and combinable source-type and reading-status
-filters. It covers saved source metadata only. Search within extracted text belongs to milestone 6.
-Tags and collections are reusable, case-insensitive names assigned from the source editor and can
-be combined with the other library filters. Source deletion now requires confirmation, removes
-source-owned database relationships, stages every managed original and extraction before the
-database commit, and restores staged files when the commit fails. Shared tag and collection
-definitions remain available for other sources. Bibliography import now accepts UTF-8 BibTeX, RIS,
-and CSL JSON files, validates the complete import before saving, maps supported metadata into the
-source model, preserves supported non-DOI identifiers and format-scoped record keys, and reports
-DOI duplicates without overwriting saved sources. Preserved identifiers can be corrected from the
-source detail screen. Bibliography export downloads the full library as deterministic UTF-8
-BibTeX, RIS, or CSL JSON, reuses safe format-scoped record keys, generates stable keys for manual
-sources, and preserves standard and explicitly named identifiers across Litrev round trips. The
-DOI workflow contacts Crossref only after an explicit lookup action, presents current and proposed
-values side by side, leaves conflicting fields unselected, and applies only the fields the user
-chooses. Saved identifiers are merged rather than replaced. Applied fields retain the provider,
-provider record link, DOI, and retrieval and application times on the source detail screen.
-
-Milestone 2 is complete. Bounded DOI-first capture and ISBN lookup follow-ups come next, before
-milestone 3.
+- Metadata is edited locally with consistent empty-value normalization, HTTP(S)-only URLs, and
+  duplicate DOI rejection without partial writes.
+- Library discovery searches saved title, author, venue, and DOI metadata and combines sorting with
+  source-type, reading-status, tag, and collection filters. Extracted-text search remains in
+  milestone 6.
+- Source deletion is confirmed and recoverable across database and managed-file failures. Shared
+  tag and collection definitions remain available to other sources.
+- BibTeX, RIS, and CSL JSON import validates the full file before saving, preserves supported
+  identifiers and format-scoped record keys, and reports DOI duplicates without overwriting saved
+  sources. Export produces deterministic UTF-8 output with stable keys.
+- Crossref and Open Library are contacted only after explicit user actions. Current and proposed
+  values are reviewed side by side, conflicts remain unselected, identifiers are merged, and
+  applied fields retain provider provenance. Saved-book ISBN enrichment additionally requires an
+  explicit ISBN choice and re-fetches the catalog record before applying.
 
 Acceptance criteria:
 
@@ -93,6 +114,8 @@ Acceptance criteria:
 
 Outcome: a user can enter one DOI, review the matching provider metadata, and create a source
 without inventing a temporary title or saving a placeholder record.
+
+**Status:** Complete.
 
 This slice reuses the completed Crossref client, canonical metadata proposal, identifier handling,
 and provenance model. It must not introduce a second DOI parser, a parallel metadata model, or an
@@ -128,7 +151,7 @@ automatic lookup on page load.
   - On success, open the newly created source. If the DOI already exists, offer to open that source.
   - Cover initial, invalid-input, loading, review, changed-provider-data, duplicate, service-error,
     cancellation, and success states with labels, keyboard access, and deliberate focus movement.
-- [ ] Prove the workflow through its real boundaries.
+- [x] Prove the workflow through its real boundaries.
   - API tests cover DOI normalization, duplicate detection without a provider call, missing titles,
     provider 404/rate-limit/timeout/malformed responses, changed proposal fingerprints, selected
     fields, identifier deduplication, transaction rollback, and the preview-to-create race.
@@ -158,6 +181,8 @@ Outcome: a user can enter one ISBN-10 or ISBN-13, distinguish a structurally val
 catalog match, review edition metadata, and apply it to a saved source or create a book without a
 placeholder title.
 
+**Status:** Complete.
+
 ISBN validation and ISBN metadata lookup are separate guarantees. A checksum can detect malformed
 or mistyped input but does not prove that an ISBN was assigned to a publication. There is no public
 global publication-metadata registry equivalent to Crossref: the International ISBN Agency's
@@ -166,7 +191,7 @@ publishers, not specific publications. Use [Open Library](https://openlibrary.or
 as the initial low-volume, user-triggered catalog provider. Describe its result as a catalog match,
 not authoritative verification; missing or conflicting catalog data must remain reviewable.
 
-- [ ] Establish one authoritative ISBN identity boundary.
+- [x] Establish one authoritative ISBN identity boundary.
   - Accept one ISBN-10 or ISBN-13 with ordinary display separators, normalize it to digits plus a
     possible terminal `X`, and validate the appropriate check digit before networking.
   - Derive the equivalent ISBN-13 key for an ISBN-10 so both forms match as one identity while
@@ -175,7 +200,7 @@ not authoritative verification; missing or conflicting catalog data must remain 
     checksum-valid number as assigned, registered, or found.
   - Apply strict validation to lookup inputs first. Do not make an existing imported ISBN prevent an
     unrelated source edit, and do not rewrite or discard stored identifiers during migration.
-- [ ] Add an opt-in Open Library metadata provider behind the service boundary.
+- [x] Add an opt-in Open Library metadata provider behind the service boundary.
   - Contact Open Library only after an explicit lookup action. Follow its identification, caching,
     and rate-limit guidance; bound response size and duration as for the Crossref client.
   - Require the returned edition to contain the requested canonical ISBN. Treat no match, timeout,
@@ -186,7 +211,7 @@ not authoritative verification; missing or conflicting catalog data must remain 
     identifiers. A usable provider title is mandatory for creation.
   - Keep provider-specific response parsing in `services/`; do not make Open Library response types
     part of the FastAPI or React contract.
-- [ ] Generalize metadata review and provenance without creating an ISBN-only parallel model.
+- [x] Generalize metadata review and provenance without creating an ISBN-only parallel model.
   - Migrate the DOI-specific requested and retrieved identifier columns to an identifier type and
     value representation while preserving every existing Crossref provenance record.
   - Reuse one proposal, field-selection, conflict, fingerprint, application, and provenance shape
@@ -196,34 +221,41 @@ not authoritative verification; missing or conflicting catalog data must remain 
     provider record and return a new review if its fingerprint changed.
   - Save selected fields and applied provenance in one transaction. Provider, validation, or commit
     failures and cancellation must leave the source and lookup history unchanged.
-- [ ] Add ISBN lookup to saved books and ISBN-first capture to the existing capture area.
-  - Reuse the DOI review interface and existing source editor rather than adding another dashboard.
-    If a saved source has multiple ISBNs, require the user to choose the one to look up.
-  - Make both outbound actions visible: **Look up ISBN** retrieves a proposal and **Apply metadata**
-    or **Add source** revalidates it before saving. Opening, importing, or editing a source must not
-    trigger a lookup.
-  - Show the entered and canonical ISBN, provider link, current and proposed values, unavailable
-    fields, and any ambiguity. Leave conflicting fields unselected and let the user exclude optional
-    provider values.
+- [x] Add ISBN-first capture to the existing capture area.
+  - Reuse the DOI review interface rather than adding another dashboard. Make both outbound actions
+    visible: **Look up ISBN** retrieves a proposal and **Add book** revalidates it before saving.
+    Opening, importing, or editing a source does not trigger a lookup.
+  - Show the entered, normalized, and canonical ISBN, provider link, mapped values, unavailable
+    fields, and any ambiguity. Let the user exclude optional provider values while keeping the title
+    selected.
   - Search the local library by canonical ISBN before networking and offer to open matching sources.
     Do not impose global ISBN uniqueness in this slice: imported citations may share a set or
     publication ISBN, and historical catalog data can contain reused ISBNs.
   - Cover initial, invalid-input, loading, review, changed-provider-data, local-match, ambiguous,
     not-found, service-error, cancellation, and success states with labels, keyboard access, and
     deliberate focus movement.
-- [ ] Prove the workflow through its real boundaries.
+- [x] Prove ISBN-first capture through its real boundaries.
   - Domain tests cover ISBN-10 and ISBN-13 normalization, check digits, terminal `X`, equivalent
     canonical keys, separators, invalid prefixes, and failure messages.
   - Provider and API tests cover no request before validation, exact identifier matching, missing
     titles, zero or multiple records, rate limits, timeout, oversized and malformed responses,
     changed fingerprints, selected fields, transaction rollback, and preservation of DOI
     provenance through the migration.
-  - React tests prove no implicit request, ISBN choice when several are saved, conflict selection,
-    ambiguity handling, cancellation without writes, and reopening after successful apply or create.
+  - React tests prove no implicit request, ambiguity handling, cancellation without writes, local
+    matching and explicit bypass, reviewed selection, changed-provider data, and reopening after
+    successful creation.
   - The acceptance path is: ISBN → validate → preview → review → create → reopen →
     export → import into an empty library → compare supported metadata and canonical ISBN.
     Verify provider provenance separately because bibliography formats do not carry Litrev's audit
     record.
+- [x] Add ISBN lookup and conflict review to saved books.
+  - Reuse the existing source editor and shared metadata review. If a saved source has multiple
+    ISBNs, require the user to choose the one to look up.
+  - Make **Look up ISBN metadata** and **Apply selected fields** explicit. Show current and proposed
+    values together, leave conflicts unselected, re-fetch before applying, and retain selected-field
+    provenance.
+  - Prove ISBN choice, conflict selection, changed source metadata, cancellation, provider failures,
+    transactional apply, and successful reopen with API and React tests.
 
 Acceptance criteria:
 
@@ -245,6 +277,8 @@ availability, and new edition-, format-, or page-count fields.
 
 Outcome: a user can open a saved PDF in a dedicated Reader, move through it one page at a time,
 create persistent text highlights and manual notes, and reopen a note on the correct page.
+
+**Status:** In progress. Sections 3.1 through 3.4 are complete; section 3.5 is next.
 
 This milestone is intentionally a small local reading workflow, not a general PDF editor or the
 full notes workbench. PDF is the only visual format in scope. The Reader must remain useful without
@@ -290,20 +324,24 @@ display, selectable text, and highlight geometry.
   - Cover initial, loading, ready, empty, malformed, encrypted, missing-file, changed-file, and page
     render-error states without presenting a partially loaded document as usable.
 
-### 3.3. Persist page-aware text highlights
+### 3.3. Add recoverable page-aware text highlights
 
-- [ ] Add text selection and one persistent highlight style.
+- [x] Add text selection and one persistent highlight style.
   - Build selection on the PDF text layer rather than inferred OCR or canvas pixels. Selecting text
     offers an explicit **Highlight** action; selection alone must not write data.
   - Define one coordinate conversion path between rendered viewport rectangles and persisted page
     coordinates.
-  - Store the attachment, one-based page number, exact selected text, and one or more rectangles in
-    stable page coordinates. Do not persist transient browser or zoom-scaled DOM coordinates.
+  - Add a forward-only migration and authoritative API boundary that store the source-owned
+    attachment, one-based page number, exact selected text, and one or more rectangles in stable
+    page coordinates. Do not persist transient browser or zoom-scaled DOM coordinates.
+  - Validate attachment ownership, page numbers, finite coordinate values, rectangle bounds, and
+    selected-text limits before writing. A validation, storage, or commit failure must not leave a
+    partial highlight or a false saved state in the UI.
   - Render saved highlights as a non-destructive overlay and leave the managed PDF bytes unchanged.
     A highlight must remain aligned after zooming, closing the Reader, and reopening the document.
   - Support deleting a highlight with an explicit action. Deleting a highlight must not silently
     delete a linked note.
-- [ ] Handle pages without selectable text honestly.
+- [x] Handle pages without selectable text honestly.
   - Display scanned or image-only pages for reading when PDF.js can render them, but disable text
     highlighting on pages with no usable text layer and explain that selectable text is unavailable.
   - Do not invoke local or hosted OCR automatically. Area highlights, OCR-backed text selection,
@@ -311,36 +349,34 @@ display, selectable text, and highlight geometry.
 
 ### 3.4. Create manual Litrev notes from the Reader
 
-- [ ] Let the user create and edit a manual note for the current page, optionally anchored to a
+- [x] Let the user create and edit a manual note for the current page, optionally anchored to a
   selected highlight.
   - Persist the note through the existing note model rather than introducing a reader-only comment
     record. Reader-created notes must be available to the future notes workbench without copying or
     converting them.
+  - Add forward-only structured-locator fields while preserving all existing sources, attachments,
+    and notes. Locator fields remain nullable for notes created outside the Reader or before this
+    milestone.
   - Add a structured reader anchor containing the source-owned attachment and one-based page, plus
     the highlight reference when present. Do not rely on parsing a display-only locator string.
+  - Validate the note, attachment, page, and optional highlight relationship at the authoritative
+    service boundary. Save a highlight and its initial note atomically when the user creates both;
+    a failed validation, storage, or commit leaves neither a partial record nor a false saved state.
+  - Define ownership and deletion behavior explicitly: source deletion removes source-owned reader
+    records through the existing confirmed workflow; removing an attachment with highlights or
+    anchored notes must not silently destroy them; deleting a highlight preserves its note.
   - Present the source, page locator, selected quote when available, note body, and save state in a
     compact Reader side panel. Empty notes are not saved.
   - Keep note creation and editing entirely manual. No prompt, summary, suggestion, or other AI
     action belongs in the Reader milestone.
-- [ ] Reopen Reader notes on the correct page.
+- [x] Reopen Reader notes on the correct page.
   - A note locator opens the owning PDF in Reader and navigates to its saved page. Returning to the
     exact scroll position, selection range, or zoom level is not required.
   - If the attachment or managed file is unavailable, preserve the note and its locator and show a
     specific unresolved-attachment state rather than dropping research data.
 
-### 3.5. Make annotation persistence recoverable
+### 3.5. Prove annotations through their real boundaries
 
-- [ ] Add forward-only migrations for annotations and structured reader note anchors.
-  - Preserve all existing sources, attachments, and notes. New locator fields must be nullable for
-    notes created outside the Reader or before this milestone.
-  - Define ownership and deletion behavior explicitly: source deletion removes source-owned reader
-    records through the existing confirmed workflow; removing an attachment with highlights or
-    anchored notes must not silently destroy them; deleting a highlight preserves its note.
-  - Validate page numbers, finite coordinate values, rectangle bounds, selected-text limits, and
-    attachment relationships at the authoritative service boundary.
-  - Save a highlight and its initial note atomically when the user creates both in one action. A
-    validation, storage, or commit failure must leave neither a partial highlight nor a false saved
-    state in the UI.
 - [ ] Prove the Reader through its real boundaries.
   - API and persistence tests cover full and ranged PDF responses, wrong attachment types, missing
     or changed managed files, invalid pages and geometry, migration of existing libraries,
@@ -380,6 +416,8 @@ annotated PDF, a standalone notes workbench, and all AI-generated notes or summa
 
 Outcome: reading artifacts become a structured, reviewable body of evidence.
 
+**Status:** Planned.
+
 - [ ] Add free-form and structured paper summaries.
 - [ ] Add atomic notes linked to one or more sources or annotations.
 - [ ] Add claims with supporting, contradicting, and contextual evidence.
@@ -396,10 +434,18 @@ Acceptance criteria:
 
 Outcome: meaningful relationships among sources, authors, concepts, and claims are inspectable.
 
-- [ ] Replace the in-memory graph prototype with persisted typed relationships.
-- [ ] Distinguish user-created, imported citation, and inferred links.
-- [ ] Add a focused graph UI with filtering and useful default layouts.
-- [ ] Ingest citations and references where reliable metadata is available.
+**Status:** Planned.
+
+Detailed delivery plan: [Network page roadmap](roadmap_network.md).
+
+- [ ] Replace the in-memory graph prototype with persisted citation observations and typed manual
+  relationships whose direction and provenance are inspectable.
+- [ ] Add explicit OpenAlex DOI-to-Work lookup, ingest its bounded outgoing `referenced_works`, and
+  match DOI-bearing references to saved sources without guessing from unstructured citations.
+- [ ] Add a first-class **Network** page with a focused graph, an equivalent accessible relationship
+  list, coverage states, filtering, and useful default layouts.
+- [ ] Let users add and remove manual `related` and directed `cites` relationships without changing
+  provider evidence.
 - [ ] Add author, topic, and timeline views only when their underlying data is inspectable.
 
 Acceptance criteria:
@@ -410,6 +456,8 @@ Acceptance criteria:
 ## 6. Full-text search and retrieval
 
 Outcome: a user can retrieve passages and ideas across the library, not only source metadata.
+
+**Status:** Planned.
 
 - [ ] Index source metadata, Anydoc Markdown, notes, and annotations with SQLite FTS5.
 - [ ] Return contextual snippets linked to their source locations.
@@ -424,6 +472,8 @@ Acceptance criteria:
 ## 7. Packaging, portability, and resilience
 
 Outcome: Litrev behaves like a dependable personal desktop application.
+
+**Status:** Planned.
 
 - [ ] Package the Python service as a managed Tauri sidecar.
 - [ ] Add clean startup, shutdown, health recovery, and port-conflict handling.
@@ -440,6 +490,8 @@ Acceptance criteria:
 ## 8. Optional AI assistance
 
 Outcome: AI accelerates synthesis without weakening traceability or creating provider dependence.
+
+**Status:** Planned.
 
 - [ ] Define provider-neutral interfaces and a fully functional no-AI mode.
 - [ ] Add library-grounded question answering with source and locator citations.

@@ -5,13 +5,17 @@ import remarkGfm from "remark-gfm";
 import {
   ApiError,
   applyDoiMetadataLookup,
+  applyIsbnMetadataLookup,
   convertAttachment,
   createBibliographyImport,
   createDoiMetadataLookup,
   createDoiMetadataPreview,
   createDocumentImport,
+  createIsbnMetadataPreview,
+  createIsbnMetadataLookup,
   createSource,
   createSourceFromDoi,
+  createSourceFromIsbn,
   getBibliographyExport,
   getExtractedText,
   getHealth,
@@ -25,12 +29,13 @@ import {
   type Attachment,
   type BibliographyFormat,
   type ConversionStatus,
-  type DoiMetadataField,
-  type DoiMetadataLookup,
   type DoiMetadataPreview,
-  type DoiMetadataProposal,
   type ExistingDoiSource,
   type ExtractedText,
+  type IsbnMetadataPreview,
+  type MetadataField,
+  type MetadataLookup,
+  type MetadataProposal,
   type ReadingStatus,
   type ReaderDocument,
   type Source,
@@ -52,8 +57,9 @@ type CapturableSourceType = Exclude<SourceType, "other">;
 type ImportStage = "idle" | "selected" | "saving" | "converting";
 type FeedbackKind = "error" | "success" | "warning";
 type DiscoverySort = "title" | "publication-year" | "recently-added";
-type CaptureMode = "title" | "doi";
+type CaptureMode = "title" | "doi" | "isbn";
 type ProviderDoiMetadataPreview = Extract<DoiMetadataPreview, { kind: "proposal" }>;
+type ProviderIsbnMetadataPreview = Extract<IsbnMetadataPreview, { kind: "proposal" }>;
 
 const sourceTypeLabels: Record<SourceType, string> = {
   paper: "Paper",
@@ -79,7 +85,7 @@ const bibliographyExportFilenames: Record<BibliographyFormat, string> = {
   "csl-json": "litrev-library.json",
 };
 
-const doiMetadataFieldLabels: Record<DoiMetadataField, string> = {
+const metadataFieldLabels: Record<MetadataField, string> = {
   source_type: "Source type",
   title: "Title",
   authors: "Authors",
@@ -210,7 +216,7 @@ function identifierDraftFrom(source: Source): string {
     .join("\n");
 }
 
-function doiMetadataSourceValue(source: Source, field: DoiMetadataField): string {
+function metadataSourceValue(source: Source, field: MetadataField): string {
   if (field === "source_type") return sourceTypeLabels[source.source_type];
   if (field === "authors") return source.authors.join(", ") || "Not added";
   if (field === "identifiers") {
@@ -226,9 +232,9 @@ function doiMetadataSourceValue(source: Source, field: DoiMetadataField): string
   return value === null || value === "" ? "Not added" : String(value);
 }
 
-function doiMetadataProposalValue(
-  review: { proposal: DoiMetadataProposal },
-  field: DoiMetadataField,
+function metadataProposalValue(
+  review: { proposal: MetadataProposal },
+  field: MetadataField,
 ): string {
   const value = review.proposal[field];
   if (field === "source_type" && typeof value === "string") {
@@ -321,6 +327,8 @@ function readerDocumentFrom(source: Source, attachment: Attachment): ReaderDocum
     source_title: source.title,
     original_filename: attachment.original_filename,
     byte_size: attachment.byte_size,
+    attachment_availability: "available",
+    reader_notes: [],
   };
 }
 
@@ -353,6 +361,70 @@ function providerDoiPreviewFrom(value: unknown): ProviderDoiMetadataPreview | nu
   return value as ProviderDoiMetadataPreview;
 }
 
+function providerIsbnPreviewFrom(value: unknown): ProviderIsbnMetadataPreview | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("kind" in value) ||
+    value.kind !== "proposal" ||
+    !("input_isbn" in value) ||
+    typeof value.input_isbn !== "string" ||
+    !("normalized_isbn" in value) ||
+    typeof value.normalized_isbn !== "string" ||
+    !("canonical_isbn13" in value) ||
+    typeof value.canonical_isbn13 !== "string" ||
+    !("provider" in value) ||
+    typeof value.provider !== "string" ||
+    !("provider_url" in value) ||
+    typeof value.provider_url !== "string" ||
+    !("retrieved_isbn" in value) ||
+    typeof value.retrieved_isbn !== "string" ||
+    !("retrieved_at" in value) ||
+    typeof value.retrieved_at !== "string" ||
+    !("proposal_fingerprint" in value) ||
+    typeof value.proposal_fingerprint !== "string" ||
+    !("proposal" in value) ||
+    typeof value.proposal !== "object" ||
+    value.proposal === null ||
+    !("available_fields" in value) ||
+    !Array.isArray(value.available_fields)
+  ) {
+    return null;
+  }
+  return value as ProviderIsbnMetadataPreview;
+}
+
+function metadataLookupFrom(value: unknown, identifierType: "doi" | "isbn"): MetadataLookup | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "number" ||
+    !("provider" in value) ||
+    typeof value.provider !== "string" ||
+    !("provider_url" in value) ||
+    typeof value.provider_url !== "string" ||
+    !("identifier_type" in value) ||
+    value.identifier_type !== identifierType ||
+    !("requested_identifier" in value) ||
+    typeof value.requested_identifier !== "string" ||
+    !("retrieved_identifier" in value) ||
+    typeof value.retrieved_identifier !== "string" ||
+    !("retrieved_at" in value) ||
+    typeof value.retrieved_at !== "string" ||
+    !("proposal" in value) ||
+    typeof value.proposal !== "object" ||
+    value.proposal === null ||
+    !("available_fields" in value) ||
+    !Array.isArray(value.available_fields) ||
+    !("conflicting_fields" in value) ||
+    !Array.isArray(value.conflicting_fields)
+  ) {
+    return null;
+  }
+  return value as MetadataLookup;
+}
+
 function existingDoiSourceFrom(value: unknown): ExistingDoiSource | null {
   if (
     typeof value !== "object" ||
@@ -372,22 +444,22 @@ function existingDoiSourceFrom(value: unknown): ExistingDoiSource | null {
   return value as ExistingDoiSource;
 }
 
-interface DoiMetadataFieldsProps {
+interface MetadataFieldsProps {
   busy: boolean;
-  conflictingFields?: DoiMetadataField[];
+  conflictingFields?: MetadataField[];
   currentSource?: Source;
   legend: string;
-  onToggle: (field: DoiMetadataField) => void;
+  onToggle: (field: MetadataField) => void;
   provider: string;
-  requiredFields?: DoiMetadataField[];
+  requiredFields?: MetadataField[];
   review: {
-    proposal: DoiMetadataProposal;
-    available_fields: DoiMetadataField[];
+    proposal: MetadataProposal;
+    available_fields: MetadataField[];
   };
-  selectedFields: DoiMetadataField[];
+  selectedFields: MetadataField[];
 }
 
-function DoiMetadataFields({
+function MetadataFields({
   busy,
   conflictingFields = [],
   currentSource,
@@ -397,7 +469,7 @@ function DoiMetadataFields({
   requiredFields = [],
   review,
   selectedFields,
-}: DoiMetadataFieldsProps) {
+}: MetadataFieldsProps) {
   return (
     <fieldset className="doi-field-list">
       <legend>{legend}</legend>
@@ -413,7 +485,7 @@ function DoiMetadataFields({
                 onChange={() => onToggle(field)}
                 type="checkbox"
               />
-              <strong>{doiMetadataFieldLabels[field]}</strong>
+              <strong>{metadataFieldLabels[field]}</strong>
               {required && <span className="doi-required-label">Required</span>}
               {conflicts && <span className="doi-conflict-label">Conflict</span>}
             </span>
@@ -421,12 +493,12 @@ function DoiMetadataFields({
               {currentSource && (
                 <span>
                   <small>Current</small>
-                  {doiMetadataSourceValue(currentSource, field)}
+                  {metadataSourceValue(currentSource, field)}
                 </span>
               )}
               <span>
                 <small>{provider}</small>
-                {doiMetadataProposalValue(review, field)}
+                {metadataProposalValue(review, field)}
               </span>
             </span>
             {currentSource && field === "identifiers" && (
@@ -456,7 +528,7 @@ function DoiCaptureForm({
 }: DoiCaptureFormProps) {
   const [doi, setDoi] = useState("");
   const [preview, setPreview] = useState<DoiMetadataPreview | null>(null);
-  const [selectedFields, setSelectedFields] = useState<DoiMetadataField[]>([]);
+  const [selectedFields, setSelectedFields] = useState<MetadataField[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isDoiInvalid, setIsDoiInvalid] = useState(false);
   const [isLookingUp, setIsLookingUp] = useState(false);
@@ -481,8 +553,8 @@ function DoiCaptureForm({
 
   function selectedFieldsFor(
     proposal: ProviderDoiMetadataPreview,
-    previous?: DoiMetadataField[],
-  ): DoiMetadataField[] {
+    previous?: MetadataField[],
+  ): MetadataField[] {
     const available = previous
       ? previous.filter((field) => proposal.available_fields.includes(field))
       : [...proposal.available_fields];
@@ -557,7 +629,7 @@ function DoiCaptureForm({
     }
   }
 
-  function toggleField(field: DoiMetadataField) {
+  function toggleField(field: MetadataField) {
     if (field === "title") return;
     setSelectedFields((current) =>
       current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
@@ -738,7 +810,7 @@ function DoiCaptureForm({
               View provider record
             </a>
           </div>
-          <DoiMetadataFields
+          <MetadataFields
             busy={isCreating}
             legend="Choose metadata to save"
             onToggle={toggleField}
@@ -755,6 +827,330 @@ function DoiCaptureForm({
               type="button"
             >
               {isCreating ? "Adding…" : "Add source"}
+            </button>
+            <button disabled={isCreating} onClick={cancelReview} type="button">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface IsbnCaptureFormProps {
+  onBusyChange: (busy: boolean) => void;
+  onCreated: (source: SourceDetail) => void;
+  onOpenExisting: (sourceId: number) => Promise<boolean>;
+  serviceReady: boolean;
+}
+
+function IsbnCaptureForm({
+  onBusyChange,
+  onCreated,
+  onOpenExisting,
+  serviceReady,
+}: IsbnCaptureFormProps) {
+  const [isbn, setIsbn] = useState("");
+  const [preview, setPreview] = useState<IsbnMetadataPreview | null>(null);
+  const [selectedFields, setSelectedFields] = useState<MetadataField[]>([]);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [isIsbnInvalid, setIsIsbnInvalid] = useState(false);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [openingSourceId, setOpeningSourceId] = useState<number | null>(null);
+  const isbnInput = useRef<HTMLInputElement>(null);
+  const lookupButton = useRef<HTMLButtonElement>(null);
+  const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const existingHeading = useRef<HTMLHeadingElement>(null);
+  const createButton = useRef<HTMLButtonElement>(null);
+  const busy = isLookingUp || isCreating || openingSourceId !== null;
+
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+
+  useEffect(() => {
+    if (preview?.kind === "proposal") reviewHeading.current?.focus();
+    if (preview?.kind === "existing_sources") existingHeading.current?.focus();
+  }, [preview]);
+
+  function selectedFieldsFor(
+    proposal: ProviderIsbnMetadataPreview,
+    previous?: MetadataField[],
+  ): MetadataField[] {
+    const available = previous
+      ? previous.filter((field) => proposal.available_fields.includes(field))
+      : [...proposal.available_fields];
+    if (proposal.available_fields.includes("title") && !available.includes("title")) {
+      available.push("title");
+    }
+    return available;
+  }
+
+  function resetReview() {
+    setPreview(null);
+    setSelectedFields([]);
+    setFeedback(null);
+    setIsIsbnInvalid(false);
+  }
+
+  function editIsbn(value: string) {
+    setIsbn(value);
+    resetReview();
+  }
+
+  async function performLookup(lookupIfLocalMatch: boolean) {
+    if (!serviceReady || busy) return;
+    if (!isbn.trim()) {
+      setFeedback({ kind: "error", message: "Enter an ISBN-10 or ISBN-13 to look up." });
+      setIsIsbnInvalid(true);
+      isbnInput.current?.focus();
+      return;
+    }
+
+    setIsLookingUp(true);
+    setFeedback(null);
+    setIsIsbnInvalid(false);
+    setPreview(null);
+    setSelectedFields([]);
+    try {
+      const result = await createIsbnMetadataPreview(isbn, lookupIfLocalMatch);
+      setPreview(result);
+      if (result.kind === "proposal") {
+        setSelectedFields(selectedFieldsFor(result));
+        if (!result.available_fields.includes("title")) {
+          setFeedback({
+            kind: "error",
+            message: "Open Library has no usable title for this edition, so it cannot be added.",
+          });
+        }
+      } else {
+        setFeedback({
+          kind: "warning",
+          message:
+            result.existing_sources.length === 1
+              ? "This ISBN matches a source in your library."
+              : "This ISBN matches multiple sources in your library.",
+        });
+      }
+    } catch (error) {
+      const problem = problemFrom(error);
+      const invalidCodes = [
+        "empty_isbn",
+        "malformed_isbn",
+        "unsupported_isbn_prefix",
+        "isbn_checksum",
+      ];
+      const invalid = typeof problem?.code === "string" && invalidCodes.includes(problem.code);
+      setIsIsbnInvalid(invalid);
+      setFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "Book metadata could not be retrieved. Check the local service and try again.",
+        ),
+      });
+      window.requestAnimationFrame(() => {
+        if (invalid) isbnInput.current?.focus();
+        else lookupButton.current?.focus();
+      });
+    } finally {
+      setIsLookingUp(false);
+    }
+  }
+
+  async function lookupIsbn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await performLookup(false);
+  }
+
+  function toggleField(field: MetadataField) {
+    if (field === "title") return;
+    setSelectedFields((current) =>
+      current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
+    );
+    if (preview?.kind !== "proposal" || preview.available_fields.includes("title")) {
+      setFeedback(null);
+    }
+  }
+
+  function cancelReview() {
+    resetReview();
+    window.requestAnimationFrame(() => lookupButton.current?.focus());
+  }
+
+  async function addReviewedBook() {
+    if (preview?.kind !== "proposal" || busy) return;
+    if (!preview.available_fields.includes("title") || !selectedFields.includes("title")) {
+      setFeedback({
+        kind: "error",
+        message: "Open Library has no usable title for this edition, so it cannot be added.",
+      });
+      reviewHeading.current?.focus();
+      return;
+    }
+
+    setIsCreating(true);
+    setFeedback(null);
+    try {
+      const source = await createSourceFromIsbn({
+        isbn: preview.input_isbn,
+        proposal_fingerprint: preview.proposal_fingerprint,
+        fields: selectedFields,
+      });
+      onCreated(source);
+    } catch (error) {
+      const problem = problemFrom(error);
+      const changedPreview =
+        problem?.code === "isbn_metadata_changed"
+          ? providerIsbnPreviewFrom(problem.preview)
+          : null;
+      if (changedPreview) {
+        setPreview(changedPreview);
+        setSelectedFields((current) => selectedFieldsFor(changedPreview, current));
+        setFeedback(
+          changedPreview.available_fields.includes("title")
+            ? {
+                kind: "warning",
+                message:
+                  problem?.message ??
+                  "Open Library metadata changed. Review the updated proposal before adding the book.",
+              }
+            : {
+                kind: "error",
+                message:
+                  "Open Library now has no usable title for this edition, so it cannot be added.",
+              },
+        );
+      } else {
+        setFeedback({
+          kind: "error",
+          message: apiFailureMessage(
+            error,
+            "The book could not be added. Review the metadata and try again.",
+          ),
+        });
+        window.requestAnimationFrame(() => createButton.current?.focus());
+      }
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function openExistingSource(sourceId: number) {
+    if (busy) return;
+    setOpeningSourceId(sourceId);
+    setFeedback(null);
+    const opened = await onOpenExisting(sourceId);
+    if (!opened) {
+      setFeedback({
+        kind: "error",
+        message: "The saved source could not be opened. Check the local service and try again.",
+      });
+    }
+    setOpeningSourceId(null);
+  }
+
+  return (
+    <div className="doi-capture isbn-capture">
+      <form aria-busy={isLookingUp} className="title-capture-form" noValidate onSubmit={lookupIsbn}>
+        <div className="capture-bar doi-capture-bar">
+          <div className="form-field">
+            <label className="visually-hidden" htmlFor="source-isbn">
+              ISBN
+            </label>
+            <input
+              aria-describedby={feedback ? "isbn-capture-feedback" : undefined}
+              aria-invalid={isIsbnInvalid}
+              autoComplete="off"
+              autoFocus
+              disabled={busy}
+              id="source-isbn"
+              maxLength={64}
+              onChange={(event) => editIsbn(event.target.value)}
+              placeholder="Enter an ISBN-10 or ISBN-13"
+              ref={isbnInput}
+              value={isbn}
+            />
+          </div>
+          <button disabled={!serviceReady || busy || preview !== null} ref={lookupButton} type="submit">
+            {isLookingUp ? "Looking up…" : "Look up ISBN"}
+          </button>
+        </div>
+      </form>
+
+      {feedback && (
+        <p
+          className={`capture-feedback ${feedback.kind}`}
+          id="isbn-capture-feedback"
+          role={feedback.kind === "error" ? "alert" : "status"}
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      {preview?.kind === "existing_sources" && (
+        <div className="doi-existing-source isbn-existing-sources">
+          <div>
+            <h3 ref={existingHeading} tabIndex={-1}>
+              ISBN already in library
+            </h3>
+            <ul>
+              {preview.existing_sources.map((source) => (
+                <li key={source.id}>
+                  <span>
+                    <strong>{source.title}</strong>
+                    <small>
+                      {sourceTypeLabels[source.source_type]} · {source.isbn_values.join(", ")}
+                    </small>
+                  </span>
+                  <button disabled={busy} onClick={() => void openExistingSource(source.id)} type="button">
+                    {openingSourceId === source.id ? "Opening…" : "Open source"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <button disabled={busy} onClick={() => void performLookup(true)} type="button">
+            {isLookingUp ? "Looking up…" : "Look up Open Library anyway"}
+          </button>
+        </div>
+      )}
+
+      {preview?.kind === "proposal" && (
+        <div aria-busy={isCreating} className="doi-metadata-review doi-capture-review">
+          <div className="doi-review-intro">
+            <div>
+              <h3 ref={reviewHeading} tabIndex={-1}>
+                Review catalog metadata from {preview.provider}
+              </h3>
+              <p>
+                Valid ISBN {preview.normalized_isbn}; canonical ISBN-13 {preview.canonical_isbn13}. Catalog
+                match retrieved {formatLookupDate(preview.retrieved_at)} for ISBN {preview.retrieved_isbn}.
+              </p>
+            </div>
+            <a href={preview.provider_url} rel="noreferrer" target="_blank">
+              View catalog record
+            </a>
+          </div>
+          <MetadataFields
+            busy={isCreating}
+            legend="Choose metadata to save"
+            onToggle={toggleField}
+            provider={preview.provider}
+            requiredFields={["title"]}
+            review={preview}
+            selectedFields={selectedFields}
+          />
+          <div className="doi-review-actions">
+            <button
+              disabled={isCreating || !preview.available_fields.includes("title")}
+              onClick={addReviewedBook}
+              ref={createButton}
+              type="button"
+            >
+              {isCreating ? "Adding…" : "Add book"}
             </button>
             <button disabled={isCreating} onClick={cancelReview} type="button">
               Cancel
@@ -783,7 +1179,7 @@ export default function App() {
   const [isSavingSource, setIsSavingSource] = useState(false);
   const [captureFeedback, setCaptureFeedback] = useState<Feedback | null>(null);
   const [captureMode, setCaptureMode] = useState<CaptureMode>("title");
-  const [isDoiCaptureBusy, setIsDoiCaptureBusy] = useState(false);
+  const [isIdentifierCaptureBusy, setIsIdentifierCaptureBusy] = useState(false);
   const [document, setDocument] = useState<File | null>(null);
   const [importSourceType, setImportSourceType] = useState<CapturableSourceType>("paper");
   const [importTitle, setImportTitle] = useState("");
@@ -815,6 +1211,7 @@ export default function App() {
   const [isReaderOpen, setIsReaderOpen] = useState(false);
   const [readerDocuments, setReaderDocuments] = useState<ReaderDocument[]>([]);
   const [selectedReaderDocument, setSelectedReaderDocument] = useState<ReaderDocument | null>(null);
+  const [readerInitialPage, setReaderInitialPage] = useState(1);
   const [isLoadingReaderDocuments, setIsLoadingReaderDocuments] = useState(false);
   const [readerError, setReaderError] = useState<string | null>(null);
   const titleInput = useRef<HTMLInputElement>(null);
@@ -977,6 +1374,7 @@ export default function App() {
     setIsSettingsOpen(false);
     setIsReaderOpen(false);
     setSelectedReaderDocument(null);
+    setReaderInitialPage(1);
     setSelectedSource(null);
     setIsLoadingSource(false);
     setSourceError(null);
@@ -1021,6 +1419,7 @@ export default function App() {
     setIsSettingsOpen(false);
     setIsReaderOpen(true);
     setSelectedReaderDocument(null);
+    setReaderInitialPage(1);
     setSelectedSource(null);
     setIsLoadingSource(false);
     setSourceError(null);
@@ -1030,8 +1429,9 @@ export default function App() {
     void loadReaderDocuments();
   }
 
-  function openReaderDocument(document: ReaderDocument) {
+  function openReaderDocument(document: ReaderDocument, pageNumber = 1) {
     setSelectedReaderDocument(document);
+    setReaderInitialPage(pageNumber);
     setReaderError(null);
   }
 
@@ -1045,6 +1445,7 @@ export default function App() {
       ...current.filter((item) => item.attachment_id !== document.attachment_id),
     ]);
     setSelectedReaderDocument(document);
+    setReaderInitialPage(1);
     setIsSettingsOpen(false);
     setIsReaderOpen(true);
     setSelectedSource(null);
@@ -1056,6 +1457,7 @@ export default function App() {
 
   function showReaderDocuments() {
     setSelectedReaderDocument(null);
+    setReaderInitialPage(1);
     void loadReaderDocuments();
   }
 
@@ -1146,6 +1548,18 @@ export default function App() {
     setDetailNotice({
       kind: "success",
       message: `Added “${source.title}” from Crossref.`,
+    });
+  }
+
+  function showCreatedIsbnSource(source: SourceDetail) {
+    sourceRequest.current += 1;
+    setSources((current) => [...current.filter((item) => item.id !== source.id), source]);
+    setSelectedSource(source);
+    setSourceError(null);
+    setLibraryNotice(null);
+    setDetailNotice({
+      kind: "success",
+      message: `Added “${source.title}” from Open Library.`,
     });
   }
 
@@ -1450,16 +1864,37 @@ export default function App() {
     }
   }
 
-  async function lookupSourceDoiMetadata(sourceId: number): Promise<DoiMetadataLookup> {
+  async function lookupSourceDoiMetadata(sourceId: number): Promise<MetadataLookup> {
     return createDoiMetadataLookup(sourceId);
   }
 
   async function applySourceDoiMetadata(
     sourceId: number,
     lookupId: number,
-    fields: DoiMetadataField[],
+    fields: MetadataField[],
   ): Promise<SourceDetail> {
     const updated = await applyDoiMetadataLookup(sourceId, lookupId, fields);
+    setSelectedSource(updated);
+    setSources((current) => [
+      ...current.filter((source) => source.id !== updated.id),
+      updated,
+    ]);
+    return updated;
+  }
+
+  async function lookupSourceIsbnMetadata(
+    sourceId: number,
+    isbn: string,
+  ): Promise<MetadataLookup> {
+    return createIsbnMetadataLookup(sourceId, isbn);
+  }
+
+  async function applySourceIsbnMetadata(
+    sourceId: number,
+    lookupId: number,
+    fields: MetadataField[],
+  ): Promise<SourceDetail> {
+    const updated = await applyIsbnMetadataLookup(sourceId, lookupId, fields);
     setSelectedSource(updated);
     setSources((current) => [
       ...current.filter((source) => source.id !== updated.id),
@@ -1643,6 +2078,7 @@ export default function App() {
               <ReaderScreen
                 documents={readerDocuments}
                 error={readerError}
+                initialPage={readerInitialPage}
                 isLoading={isLoadingReaderDocuments}
                 onBackToDocuments={showReaderDocuments}
                 onOpenDocument={openReaderDocument}
@@ -1663,12 +2099,14 @@ export default function App() {
               key={selectedSource.id}
               loadingTextAttachmentId={loadingTextAttachmentId}
               onApplyDoiMetadata={applySourceDoiMetadata}
+              onApplyIsbnMetadata={applySourceIsbnMetadata}
               onBack={showLibrary}
               onDeleteSource={deleteSelectedSource}
               onRemove={removeFailedAttachment}
               onRetry={retryExtraction}
               onSaveMetadata={saveSourceMetadata}
               onLookupDoiMetadata={lookupSourceDoiMetadata}
+              onLookupIsbnMetadata={lookupSourceIsbnMetadata}
               onOpenReader={openAttachmentInReader}
               onToggleText={toggleExtractedText}
               removingAttachmentId={removingAttachmentId}
@@ -1682,14 +2120,14 @@ export default function App() {
                 <div className="capture-heading">
                   <p className="eyebrow">Quick capture</p>
                   <h2 id="capture-heading">Add a source</h2>
-                  <p>Start with a title or DOI, or import a document from this device.</p>
+                  <p>Start with a title, DOI, or ISBN, or import a document from this device.</p>
                 </div>
                 <fieldset className="capture-mode-switch">
                   <legend>Start with</legend>
                   <label>
                     <input
                       checked={captureMode === "title"}
-                      disabled={isSavingSource || isDoiCaptureBusy}
+                      disabled={isSavingSource || isIdentifierCaptureBusy}
                       name="capture-mode"
                       onChange={() => changeCaptureMode("title")}
                       type="radio"
@@ -1699,12 +2137,22 @@ export default function App() {
                   <label>
                     <input
                       checked={captureMode === "doi"}
-                      disabled={isSavingSource || isDoiCaptureBusy}
+                      disabled={isSavingSource || isIdentifierCaptureBusy}
                       name="capture-mode"
                       onChange={() => changeCaptureMode("doi")}
                       type="radio"
                     />
                     DOI first
+                  </label>
+                  <label>
+                    <input
+                      checked={captureMode === "isbn"}
+                      disabled={isSavingSource || isIdentifierCaptureBusy}
+                      name="capture-mode"
+                      onChange={() => changeCaptureMode("isbn")}
+                      type="radio"
+                    />
+                    ISBN first
                   </label>
                 </fieldset>
                 {captureMode === "title" ? (
@@ -1765,10 +2213,17 @@ export default function App() {
                       </p>
                     )}
                   </form>
-                ) : (
+                ) : captureMode === "doi" ? (
                   <DoiCaptureForm
-                    onBusyChange={setIsDoiCaptureBusy}
+                    onBusyChange={setIsIdentifierCaptureBusy}
                     onCreated={showCreatedDoiSource}
+                    onOpenExisting={openSource}
+                    serviceReady={serviceReady}
+                  />
+                ) : (
+                  <IsbnCaptureForm
+                    onBusyChange={setIsIdentifierCaptureBusy}
+                    onCreated={showCreatedIsbnSource}
                     onOpenExisting={openSource}
                     serviceReady={serviceReady}
                   />
@@ -2284,14 +2739,20 @@ interface SourceDetailScreenProps {
   onApplyDoiMetadata: (
     sourceId: number,
     lookupId: number,
-    fields: DoiMetadataField[],
+    fields: MetadataField[],
+  ) => Promise<SourceDetail>;
+  onApplyIsbnMetadata: (
+    sourceId: number,
+    lookupId: number,
+    fields: MetadataField[],
   ) => Promise<SourceDetail>;
   onBack: () => void;
   onDeleteSource: (sourceId: number, sourceTitle: string, attachmentCount: number) => Promise<void>;
   onRemove: (attachmentId: number, filename: string) => Promise<void>;
   onRetry: (attachmentId: number) => Promise<void>;
   onSaveMetadata: (sourceId: number, metadata: SourceUpdate) => Promise<boolean>;
-  onLookupDoiMetadata: (sourceId: number) => Promise<DoiMetadataLookup>;
+  onLookupDoiMetadata: (sourceId: number) => Promise<MetadataLookup>;
+  onLookupIsbnMetadata: (sourceId: number, isbn: string) => Promise<MetadataLookup>;
   onOpenReader: (attachment: Attachment) => void;
   onToggleText: (attachmentId: number) => Promise<void>;
   removingAttachmentId: number | null;
@@ -2307,12 +2768,14 @@ function SourceDetailScreen({
   isSavingMetadata,
   loadingTextAttachmentId,
   onApplyDoiMetadata,
+  onApplyIsbnMetadata,
   onBack,
   onDeleteSource,
   onRemove,
   onRetry,
   onSaveMetadata,
   onLookupDoiMetadata,
+  onLookupIsbnMetadata,
   onOpenReader,
   onToggleText,
   removingAttachmentId,
@@ -2328,17 +2791,40 @@ function SourceDetailScreen({
   const doiLookupButton = useRef<HTMLButtonElement>(null);
   const doiReviewHeading = useRef<HTMLHeadingElement>(null);
   const doiApplyButton = useRef<HTMLButtonElement>(null);
+  const isbnLookupButton = useRef<HTMLButtonElement>(null);
+  const isbnReviewHeading = useRef<HTMLHeadingElement>(null);
+  const isbnApplyButton = useRef<HTMLButtonElement>(null);
   const [isEditingMetadata, setIsEditingMetadata] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<SourceUpdate>(() =>
     metadataFromSource(source),
   );
   const [identifierDraft, setIdentifierDraft] = useState(() => identifierDraftFrom(source));
   const [identifierError, setIdentifierError] = useState<string | null>(null);
-  const [doiLookup, setDoiLookup] = useState<DoiMetadataLookup | null>(null);
-  const [selectedDoiFields, setSelectedDoiFields] = useState<DoiMetadataField[]>([]);
+  const [doiLookup, setDoiLookup] = useState<MetadataLookup | null>(null);
+  const [selectedDoiFields, setSelectedDoiFields] = useState<MetadataField[]>([]);
   const [doiFeedback, setDoiFeedback] = useState<Feedback | null>(null);
   const [isLookingUpDoi, setIsLookingUpDoi] = useState(false);
   const [isApplyingDoi, setIsApplyingDoi] = useState(false);
+  const savedIsbnValues = useMemo(
+    () =>
+      source.identifiers
+        .filter((identifier) => identifier.identifier_type === "isbn")
+        .map((identifier) => identifier.value),
+    [source.identifiers],
+  );
+  const [selectedIsbn, setSelectedIsbn] = useState(() =>
+    savedIsbnValues.length === 1 ? savedIsbnValues[0] : "",
+  );
+  const [isbnLookup, setIsbnLookup] = useState<MetadataLookup | null>(null);
+  const [selectedIsbnFields, setSelectedIsbnFields] = useState<MetadataField[]>([]);
+  const [isbnFeedback, setIsbnFeedback] = useState<Feedback | null>(null);
+  const [isLookingUpIsbn, setIsLookingUpIsbn] = useState(false);
+  const [isApplyingIsbn, setIsApplyingIsbn] = useState(false);
+  const selectedSavedIsbn = savedIsbnValues.includes(selectedIsbn)
+    ? selectedIsbn
+    : savedIsbnValues.length === 1
+      ? savedIsbnValues[0]
+      : "";
   const wasEditingMetadata = useRef(false);
   const previousAttachmentState = useRef({
     sourceId: source.id,
@@ -2378,10 +2864,21 @@ function SourceDetailScreen({
   }, [doiLookup]);
 
   useEffect(() => {
+    if (isbnLookup) isbnReviewHeading.current?.focus();
+  }, [isbnLookup]);
+
+  useEffect(() => {
     if (!doiFeedback) return;
     if (doiFeedback.kind === "error" && doiLookup) doiApplyButton.current?.focus();
     else doiLookupButton.current?.focus();
   }, [doiFeedback, doiLookup]);
+
+  useEffect(() => {
+    if (!isbnFeedback) return;
+    if (isbnFeedback.kind === "error" && isbnLookup) isbnApplyButton.current?.focus();
+    else if (isbnFeedback.kind === "warning" && isbnLookup) isbnReviewHeading.current?.focus();
+    else isbnLookupButton.current?.focus();
+  }, [isbnFeedback, isbnLookup]);
 
   function beginMetadataEdit() {
     setMetadataDraft(metadataFromSource(source));
@@ -2390,6 +2887,9 @@ function SourceDetailScreen({
     setDoiLookup(null);
     setSelectedDoiFields([]);
     setDoiFeedback(null);
+    setIsbnLookup(null);
+    setSelectedIsbnFields([]);
+    setIsbnFeedback(null);
     setIsEditingMetadata(true);
   }
 
@@ -2450,7 +2950,7 @@ function SourceDetailScreen({
     }
   }
 
-  function toggleDoiField(field: DoiMetadataField) {
+  function toggleDoiField(field: MetadataField) {
     setSelectedDoiFields((current) =>
       current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
     );
@@ -2490,6 +2990,93 @@ function SourceDetailScreen({
       });
     } finally {
       setIsApplyingDoi(false);
+    }
+  }
+
+  async function beginIsbnLookup() {
+    if (!selectedSavedIsbn) return;
+    setIsLookingUpIsbn(true);
+    setIsbnFeedback(null);
+    setIsbnLookup(null);
+    try {
+      const lookup = await onLookupIsbnMetadata(source.id, selectedSavedIsbn);
+      setIsbnLookup(lookup);
+      setSelectedIsbnFields(
+        lookup.available_fields.filter((field) => !lookup.conflicting_fields.includes(field)),
+      );
+    } catch (error) {
+      setIsbnFeedback({
+        kind: "error",
+        message: apiFailureMessage(
+          error,
+          "ISBN metadata could not be retrieved. Check the local service and try again.",
+        ),
+      });
+    } finally {
+      setIsLookingUpIsbn(false);
+    }
+  }
+
+  function toggleIsbnField(field: MetadataField) {
+    setSelectedIsbnFields((current) =>
+      current.includes(field) ? current.filter((item) => item !== field) : [...current, field],
+    );
+    setIsbnFeedback(null);
+  }
+
+  function cancelIsbnReview() {
+    setIsbnLookup(null);
+    setSelectedIsbnFields([]);
+    setIsbnFeedback(null);
+    window.requestAnimationFrame(() => isbnLookupButton.current?.focus());
+  }
+
+  async function applySelectedIsbnMetadata() {
+    if (!isbnLookup) return;
+    if (selectedIsbnFields.length === 0) {
+      setIsbnFeedback({ kind: "error", message: "Choose at least one field to apply." });
+      return;
+    }
+    setIsApplyingIsbn(true);
+    setIsbnFeedback(null);
+    try {
+      await onApplyIsbnMetadata(source.id, isbnLookup.id, selectedIsbnFields);
+      setIsbnLookup(null);
+      setSelectedIsbnFields([]);
+      setIsbnFeedback({
+        kind: "success",
+        message: `Applied ${selectedIsbnFields.length} ${selectedIsbnFields.length === 1 ? "field" : "fields"} from ${isbnLookup.provider}.`,
+      });
+    } catch (error) {
+      const problem = problemFrom(error);
+      const changedLookup =
+        problem?.code === "isbn_metadata_changed"
+          ? metadataLookupFrom(problem.lookup, "isbn")
+          : null;
+      if (changedLookup) {
+        setIsbnLookup(changedLookup);
+        setSelectedIsbnFields(
+          changedLookup.available_fields.filter(
+            (field) => !changedLookup.conflicting_fields.includes(field),
+          ),
+        );
+        setIsbnFeedback({
+          kind: "warning",
+          message:
+            problem?.message ??
+            "Open Library metadata changed. Review the updated proposal before applying it.",
+        });
+      } else {
+        setIsbnFeedback({
+          kind: "error",
+          message: apiFailureMessage(
+            error,
+            "ISBN metadata could not be applied. Review the source and try again.",
+          ),
+        });
+      }
+    } finally {
+      setIsApplyingIsbn(false);
     }
   }
 
@@ -2883,14 +3470,15 @@ function SourceDetailScreen({
                   Review metadata from {doiLookup.provider}
                 </h4>
                 <p>
-                  Retrieved {formatLookupDate(doiLookup.retrieved_at)} for DOI {doiLookup.retrieved_doi}.
+                  Retrieved {formatLookupDate(doiLookup.retrieved_at)} for DOI{" "}
+                  {doiLookup.retrieved_identifier}.
                 </p>
               </div>
               <a href={doiLookup.provider_url} rel="noreferrer" target="_blank">
                 View provider record
               </a>
             </div>
-            <DoiMetadataFields
+            <MetadataFields
               busy={isApplyingDoi}
               conflictingFields={doiLookup.conflicting_fields}
               currentSource={source}
@@ -2916,29 +3504,138 @@ function SourceDetailScreen({
           </div>
         )}
 
-        {source.metadata_provenance.length > 0 && (
-          <div className="metadata-provenance">
-            <h4>Applied metadata provenance</h4>
-            <ul>
-              {source.metadata_provenance.map((provenance) => (
-                <li key={provenance.lookup_id}>
-                  <a href={provenance.provider_url} rel="noreferrer" target="_blank">
-                    {provenance.provider}
-                  </a>{" "}
-                  for DOI {provenance.retrieved_doi}
-                  <span>
-                    Retrieved {formatLookupDate(provenance.retrieved_at)} · Applied{" "}
-                    {formatLookupDate(provenance.applied_at)} · Fields:{" "}
-                    {provenance.applied_fields
-                      .map((field) => doiMetadataFieldLabels[field].toLocaleLowerCase())
-                      .join(", ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </section>
+
+      {source.source_type === "book" && (
+        <section className="doi-metadata-section" aria-labelledby="isbn-metadata-heading">
+          <div className="doi-metadata-heading">
+            <div>
+              <h3 id="isbn-metadata-heading">ISBN metadata</h3>
+              <p>
+                Ask Open Library for catalog metadata only when you choose. Nothing changes until
+                you review and apply selected fields.
+              </p>
+            </div>
+            <button
+              disabled={
+                !selectedSavedIsbn ||
+                isEditingMetadata ||
+                isLookingUpIsbn ||
+                isApplyingIsbn ||
+                isRemovingSource ||
+                isbnLookup !== null
+              }
+              onClick={beginIsbnLookup}
+              ref={isbnLookupButton}
+              type="button"
+            >
+              {isLookingUpIsbn ? "Looking up…" : "Look up ISBN metadata"}
+            </button>
+          </div>
+
+          {savedIsbnValues.length === 0 ? (
+            <p className="doi-metadata-hint">Add and save a valid ISBN to enable lookup.</p>
+          ) : savedIsbnValues.length === 1 ? (
+            <p className="doi-metadata-hint">ISBN to look up: {savedIsbnValues[0]}</p>
+          ) : (
+            <div className="isbn-lookup-choice form-field">
+              <label htmlFor="source-isbn-lookup-choice">ISBN to look up</label>
+              <select
+                disabled={isLookingUpIsbn || isApplyingIsbn || isbnLookup !== null}
+                id="source-isbn-lookup-choice"
+                onChange={(event) => {
+                  setSelectedIsbn(event.target.value);
+                  setIsbnFeedback(null);
+                }}
+                value={selectedSavedIsbn}
+              >
+                <option disabled value="">
+                  Choose an ISBN
+                </option>
+                {savedIsbnValues.map((isbn) => (
+                  <option key={isbn} value={isbn}>
+                    {isbn}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {isbnFeedback && (
+            <p
+              className={`doi-metadata-feedback ${isbnFeedback.kind}`}
+              role={isbnFeedback.kind === "error" ? "alert" : "status"}
+            >
+              {isbnFeedback.message}
+            </p>
+          )}
+
+          {isbnLookup && (
+            <div aria-busy={isApplyingIsbn} className="doi-metadata-review">
+              <div className="doi-review-intro">
+                <div>
+                  <h4 ref={isbnReviewHeading} tabIndex={-1}>
+                    Review catalog metadata from {isbnLookup.provider}
+                  </h4>
+                  <p>
+                    Catalog match retrieved {formatLookupDate(isbnLookup.retrieved_at)} for ISBN{" "}
+                    {isbnLookup.retrieved_identifier}.
+                  </p>
+                </div>
+                <a href={isbnLookup.provider_url} rel="noreferrer" target="_blank">
+                  View catalog record
+                </a>
+              </div>
+              <MetadataFields
+                busy={isApplyingIsbn}
+                conflictingFields={isbnLookup.conflicting_fields}
+                currentSource={source}
+                legend="Choose fields to apply"
+                onToggle={toggleIsbnField}
+                provider={isbnLookup.provider}
+                review={isbnLookup}
+                selectedFields={selectedIsbnFields}
+              />
+              <div className="doi-review-actions">
+                <button
+                  disabled={isApplyingIsbn}
+                  onClick={applySelectedIsbnMetadata}
+                  ref={isbnApplyButton}
+                  type="button"
+                >
+                  {isApplyingIsbn ? "Applying…" : "Apply selected fields"}
+                </button>
+                <button disabled={isApplyingIsbn} onClick={cancelIsbnReview} type="button">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {source.metadata_provenance.length > 0 && (
+        <section className="metadata-provenance" aria-labelledby="metadata-provenance-heading">
+          <h3 id="metadata-provenance-heading">Applied metadata provenance</h3>
+          <ul>
+            {source.metadata_provenance.map((provenance) => (
+              <li key={provenance.lookup_id}>
+                <a href={provenance.provider_url} rel="noreferrer" target="_blank">
+                  {provenance.provider}
+                </a>{" "}
+                for {provenance.identifier_type.toLocaleUpperCase()} {provenance.retrieved_identifier}
+                <span>
+                  Retrieved {formatLookupDate(provenance.retrieved_at)} · Applied{" "}
+                  {formatLookupDate(provenance.applied_at)} · Fields:{" "}
+                  {provenance.applied_fields
+                    .map((field) => metadataFieldLabels[field].toLocaleLowerCase())
+                    .join(", ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="attachment-heading">
         <h3 ref={documentsHeading} tabIndex={-1}>Documents</h3>

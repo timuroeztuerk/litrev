@@ -69,6 +69,14 @@ class AttachmentRemovalNotAllowedError(Exception):
     pass
 
 
+class AttachmentRemovalBlockedByHighlightsError(Exception):
+    pass
+
+
+class AttachmentRemovalBlockedByNotesError(Exception):
+    pass
+
+
 class AttachmentRemovalDatabaseError(Exception):
     pass
 
@@ -211,7 +219,7 @@ def can_remove_attachment(record: AttachmentRecord) -> bool:
         status = ConversionStatus(record.conversion_status)
     except ValueError:
         return False
-    return status in REMOVABLE_CONVERSION_STATUSES
+    return status in REMOVABLE_CONVERSION_STATUSES and not record.highlights and not record.notes
 
 
 def remove_failed_attachment(database: Database, attachment_id: int) -> None:
@@ -223,6 +231,15 @@ def remove_failed_attachment(database: Database, attachment_id: int) -> None:
         record = session.get(AttachmentRecord, attachment_id)
         if record is None:
             raise AttachmentNotFoundError(f"Attachment {attachment_id} does not exist.")
+        if record.highlights:
+            raise AttachmentRemovalBlockedByHighlightsError(
+                "Remove the saved highlights before removing this attachment."
+            )
+        if record.notes:
+            raise AttachmentRemovalBlockedByNotesError(
+                "This attachment has saved Reader notes and must be kept. Delete the source "
+                "through its confirmed workflow only if you intend to remove those notes."
+            )
         if not can_remove_attachment(record):
             raise AttachmentRemovalNotAllowedError(
                 "Only an attachment with a failed extraction can be removed."
