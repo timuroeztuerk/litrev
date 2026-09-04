@@ -131,10 +131,16 @@ button {
   min-width: 0;
 }
 
-.sidebar {
+.sidebar.viewport-sidebar {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
+  align-self: start;
+  height: 100vh;
+  height: 100dvh;
   padding: 24px 0 20px;
+  overflow-y: auto;
   color: var(--sidebar-ink);
   background: var(--sidebar-background);
   border-right: 1px solid var(--sidebar-border);

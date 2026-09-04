@@ -286,6 +286,16 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+test("keeps the sidebar pinned to the viewport while the workspace scrolls", async () => {
+  render(<App />);
+  await screen.findByText("Local service ready");
+
+  const sidebar = screen.getByRole("complementary");
+  expect(sidebar).toHaveClass("viewport-sidebar");
+  expect(sidebar).toContainElement(screen.getByRole("button", { name: "Settings" }));
+  expect(sidebar).toContainElement(screen.getByRole("status"));
+});
+
 test("defaults to dark mode and saves a light-mode preference", async () => {
   render(<App />);
   await screen.findByText("Local service ready");

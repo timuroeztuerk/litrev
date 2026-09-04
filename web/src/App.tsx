@@ -1957,7 +1957,7 @@ export default function App() {
 
   return (
     <div className="app-shell" data-theme={isDarkMode ? "dark" : "light"}>
-      <aside className="sidebar">
+      <aside className="sidebar viewport-sidebar">
         <div className="brand">
           <span className="brand-mark">L</span>
           <span>Litrev</span>
